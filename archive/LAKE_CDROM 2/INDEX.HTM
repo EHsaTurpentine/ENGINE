@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LAKE_CDROM</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; height: 100vh; overflow: hidden;
+    background: #008080;
+    font-family: 'Tahoma', 'Segoe UI', Verdana, sans-serif;
+    font-size: 12px; color: #000;
+  }
+  /* ===== SPLASH ===== */
+  @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Kalam:wght@400;700&display=swap');
+  #splash {
+    position: fixed; inset: 0; z-index: 999;
+    background:
+      radial-gradient(ellipse at 50% 38%, #3a4a9e 0%, #232d6e 45%, #131a4a 78%, #0b0f30 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #fff; overflow: hidden;
+  }
+  #splash .stars {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+  #splash .star {
+    position: absolute; background: #fff; border-radius: 50%;
+    animation: twinkle 2.6s ease-in-out infinite;
+  }
+  @keyframes twinkle { 0%,100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+  #splash .page {
+    position: relative; width: 236px; background: #fdf8ec;
+    padding: 14px 14px 34px 14px; border-radius: 2px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.55), 0 2px 0 rgba(0,0,0,0.15);
+    transform: rotate(-3.5deg);
+    animation: float 4.5s ease-in-out infinite;
+    margin-bottom: 26px;
+  }
+  @keyframes float { 0%,100% { transform: rotate(-3.5deg) translateY(0); } 50% { transform: rotate(-2.2deg) translateY(-7px); } }
+  #splash .page img { width: 100%; display: block; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08); }
+  #splash .page .tape {
+    position: absolute; top: -10px; left: 50%; transform: translateX(-50%) rotate(-2deg);
+    width: 64px; height: 22px; background: rgba(255,255,255,0.55);
+    border: 1px solid rgba(0,0,0,0.06);
+  }
+
+  #splash h1 {
+    font-family: 'Caveat', 'Segoe Script', cursive;
+    font-size: 34px; line-height: 1.05; font-weight: 700; letter-spacing: 0.5px;
+    margin: 0 0 4px 0; text-align: center; text-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    max-width: 480px;
+  }
+  #splash p.tagline {
+    font-family: 'Kalam', 'Segoe UI', sans-serif;
+    font-size: 12.5px; letter-spacing: 0.5px; color: #cdd3f4; margin: 0 0 22px 0; text-align: center;
+  }
+  #splash .bar-outer {
+    width: 220px; height: 10px; background: rgba(0,0,0,0.28); border-radius: 6px;
+    padding: 2px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+  }
+  #splash .bar-inner {
+    height: 100%; width: 0%; border-radius: 5px;
+    background: linear-gradient(90deg, #f4c542, #f2a33e);
+    animation: load 2.4s ease-in-out forwards;
+  }
+  @keyframes load { to { width: 100%; } }
+  #splash .loadtext {
+    margin-top: 10px; font-family: 'Kalam', 'Segoe UI', sans-serif; font-size: 11px;
+    letter-spacing: 0.5px; color: #a7aee0; font-style: italic;
+  }
+
+  /* ===== DESKTOP / WINDOW CHROME ===== */
+  #desktop { display: none; height: 100vh; width: 100vw; padding: 24px; background: #008080; }
+  #win {
+    max-width: 1180px; margin: 0 auto; height: calc(100vh - 48px);
+    background: #c0c0c0; border: 2px solid; border-color: #fff #000 #000 #fff;
+    box-shadow: 4px 4px 0 rgba(0,0,0,0.4);
+    display: flex; flex-direction: column;
+  }
+  #titlebar {
+    background: linear-gradient(90deg, #000080, #1084d0);
+    color: #fff; padding: 4px 6px; display: flex; justify-content: space-between; align-items: center;
+    font-weight: bold; font-size: 13px; letter-spacing: 0.5px;
+  }
+  #titlebar .btns span {
+    display: inline-block; width: 18px; height: 16px; background: #c0c0c0; color: #000;
+    border: 1px solid; border-color: #fff #000 #000 #fff; text-align: center; line-height: 15px;
+    margin-left: 3px; font-size: 11px; font-weight: bold; cursor: default;
+  }
+  #menubar {
+    background: #c0c0c0; border-bottom: 1px solid #808080; padding: 3px 8px; font-size: 12px; display: flex; gap: 16px;
+  }
+  #body {
+    flex: 1; display: flex; overflow: hidden; padding: 8px; gap: 8px;
+  }
+  #navpane {
+    width: 280px; flex-shrink: 0; background: #fff; border: 2px inset #808080;
+    overflow-y: auto; padding: 4px;
+  }
+  #navpane .section {
+    font-weight: bold; background: #000080; color: #fff; padding: 3px 6px; margin: 6px 0 2px 0; font-size: 11px; letter-spacing: 0.5px;
+  }
+  #navpane .section:first-child { margin-top: 0; }
+  #navpane .item {
+    padding: 3px 8px 3px 18px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #navpane .item:hover { background: #000080; color: #fff; }
+  #navpane .item.active { background: #000080; color: #fff; }
+  #navpane .num { color: #808080; margin-right: 6px; }
+  #navpane .item.active .num, #navpane .item:hover .num { color: #c0c0ff; }
+
+  #viewpane {
+    flex: 1; background: #fff; border: 2px inset #808080; overflow-y: auto; padding: 22px 30px;
+  }
+  #viewpane .vp-title { font-size: 20px; font-weight: bold; margin-bottom: 2px; }
+  #viewpane .vp-sub { font-size: 11px; color: #666; margin-bottom: 16px; letter-spacing: 0.5px; }
+  #viewpane img.full { max-width: 100%; border: 1px solid #808080; display: block; margin-bottom: 8px; }
+  #viewpane .prose { font-family: Georgia, 'Times New Roman', serif; font-size: 14px; line-height: 1.65; white-space: pre-wrap; max-width: 640px; }
+  #viewpane .cover-box { max-width: 620px; }
+  #viewpane .cover-box h1 { font-size: 26px; margin: 0 0 6px 0; }
+  #viewpane .cover-box .tag { font-size: 12px; color: #555; margin-bottom: 18px; }
+  #viewpane .cover-box p { font-family: Georgia, serif; font-size: 14px; line-height: 1.6; }
+  #viewpane .pdfbtn {
+    display: inline-block; margin-top: 10px; padding: 8px 16px; background: #c0c0c0;
+    border: 2px solid; border-color: #fff #000 #000 #fff; font-weight: bold; text-decoration: none; color: #000; font-size: 13px;
+  }
+  #viewpane .pdfbtn:active { border-color: #000 #fff #fff #000; }
+  #statusbar {
+    background: #c0c0c0; border-top: 1px solid #fff; padding: 3px 10px; font-size: 11px; color: #333;
+  }
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <div class="stars">
+  <span class="star" style="top:32.4%; left:16.5%; width:1px; height:1px; animation-delay:0.19s; animation-duration:2.86s;"></span>
+  <span class="star" style="top:36.4%; left:7.6%; width:3px; height:3px; animation-delay:0.56s; animation-duration:2.14s;"></span>
+  <span class="star" style="top:41.3%; left:25.1%; width:3px; height:3px; animation-delay:1.10s; animation-duration:3.32s;"></span>
+  <span class="star" style="top:13.6%; left:23.4%; width:3px; height:3px; animation-delay:2.46s; animation-duration:2.92s;"></span>
+  <span class="star" style="top:39.3%; left:95.7%; width:1px; height:1px; animation-delay:1.45s; animation-duration:2.21s;"></span>
+  <span class="star" style="top:41.4%; left:53.9%; width:3px; height:3px; animation-delay:0.80s; animation-duration:3.31s;"></span>
+  <span class="star" style="top:19.0%; left:57.8%; width:1px; height:1px; animation-delay:0.97s; animation-duration:2.88s;"></span>
+  <span class="star" style="top:7.9%; left:7.7%; width:1px; height:1px; animation-delay:1.29s; animation-duration:2.85s;"></span>
+  <span class="star" style="top:75.1%; left:46.7%; width:2px; height:2px; animation-delay:0.94s; animation-duration:2.40s;"></span>
+  <span class="star" style="top:18.9%; left:76.9%; width:1px; height:1px; animation-delay:1.49s; animation-duration:2.84s;"></span>
+  <span class="star" style="top:84.3%; left:72.0%; width:2px; height:2px; animation-delay:1.58s; animation-duration:2.12s;"></span>
+  <span class="star" style="top:50.1%; left:17.8%; width:2px; height:2px; animation-delay:0.40s; animation-duration:2.78s;"></span>
+  <span class="star" style="top:5.7%; left:66.1%; width:3px; height:3px; animation-delay:1.49s; animation-duration:3.40s;"></span>
+  <span class="star" style="top:31.5%; left:68.7%; width:3px; height:3px; animation-delay:1.29s; animation-duration:3.28s;"></span>
+  <span class="star" style="top:8.5%; left:11.0%; width:2px; height:2px; animation-delay:1.23s; animation-duration:3.06s;"></span>
+  <span class="star" style="top:7.7%; left:69.3%; width:3px; height:3px; animation-delay:2.58s; animation-duration:3.32s;"></span>
+  <span class="star" style="top:28.8%; left:39.0%; width:2px; height:2px; animation-delay:0.06s; animation-duration:2.74s;"></span>
+  <span class="star" style="top:17.8%; left:13.2%; width:1px; height:1px; animation-delay:0.57s; animation-duration:2.46s;"></span>
+  <span class="star" style="top:71.4%; left:40.2%; width:2px; height:2px; animation-delay:0.21s; animation-duration:2.72s;"></span>
+  <span class="star" style="top:53.6%; left:86.8%; width:2px; height:2px; animation-delay:2.25s; animation-duration:2.45s;"></span>
+  <span class="star" style="top:41.0%; left:36.4%; width:2px; height:2px; animation-delay:2.49s; animation-duration:2.24s;"></span>
+  <span class="star" style="top:18.6%; left:24.3%; width:1px; height:1px; animation-delay:0.03s; animation-duration:3.33s;"></span>
+  <span class="star" style="top:19.1%; left:29.1%; width:1px; height:1px; animation-delay:1.09s; animation-duration:2.59s;"></span>
+  <span class="star" style="top:55.2%; left:93.5%; width:3px; height:3px; animation-delay:2.47s; animation-duration:3.05s;"></span>
+  <span class="star" style="top:71.5%; left:45.8%; width:3px; height:3px; animation-delay:1.02s; animation-duration:2.64s;"></span>
+  <span class="star" style="top:11.7%; left:62.9%; width:1px; height:1px; animation-delay:0.50s; animation-duration:3.58s;"></span>
+  <span class="star" style="top:43.4%; left:12.6%; width:3px; height:3px; animation-delay:0.14s; animation-duration:2.00s;"></span>
+  <span class="star" style="top:16.2%; left:11.7%; width:2px; height:2px; animation-delay:1.60s; animation-duration:2.11s;"></span>
+  <span class="star" style="top:21.5%; left:38.1%; width:2px; height:2px; animation-delay:2.48s; animation-duration:2.96s;"></span>
+  <span class="star" style="top:46.6%; left:13.1%; width:2px; height:2px; animation-delay:2.58s; animation-duration:2.75s;"></span>
+  <span class="star" style="top:47.5%; left:10.2%; width:1px; height:1px; animation-delay:1.95s; animation-duration:3.18s;"></span>
+  <span class="star" style="top:47.0%; left:68.4%; width:3px; height:3px; animation-delay:0.06s; animation-duration:3.52s;"></span>
+  <span class="star" style="top:51.7%; left:16.1%; width:3px; height:3px; animation-delay:2.38s; animation-duration:3.21s;"></span>
+  <span class="star" style="top:30.0%; left:63.7%; width:1px; height:1px; animation-delay:1.81s; animation-duration:2.42s;"></span>
+  </div>
+  <div class="page">
+    <div class="tape"></div>
+    <img src="IMAGES/13.png" alt="">
+  </div>
+  <h1>An Interview With Me<br>by Claude, the Vampire</h1>
+  <p class="tagline">twenty-six drawings from a hospital bed, made real again</p>
+  <div class="bar-outer"><div class="bar-inner"></div></div>
+  <div class="loadtext">opening the sketchbook&hellip;</div>
+</div>
+
+<div id="desktop">
+  <div id="win">
+    <div id="titlebar">
+      <span>LAKE_CDROM.EXE &mdash; AN INTERVIEW WITH ME BY CLAUDE, THE VAMPIRE</span>
+      <span class="btns"><span>_</span><span>&#9633;</span><span>&times;</span></span>
+    </div>
+    <div id="menubar"><span>File</span><span>Edit</span><span>View</span><span>Help</span></div>
+    <div id="body">
+      <div id="navpane"></div>
+      <div id="viewpane"></div>
+    </div>
+    <div id="statusbar" id="statustext">Ready.</div>
+  </div>
+</div>
+
+<script type="text/plain" id="w-selfinterview">Claude, I have a series of images I want to use for a multimodal memoir project. The images were produced in a digital coloring book app on my iPad called Lake. I had a serious health incident 4 years ago which required 2 emergency surgeries on June 27, 2022 to save my life and 4 surgeries over about 10 months total; the fourth surgery was successfully completed in April of 2023. As I recovered from the first 2 surgeries in the hospital, I began using Lake for a number of reasons; one of those reasons was to document the recovery of my fine motor skills; reading and writing and even thinking were all things I had to relearn.
+
+As I continued to make myself use Lake during that time in the hospital, I knew I was amassing material I'd use later. It wasn't until well after I got out of the hospital for good I realized what the images were in one regard was an actual trauma journal, if for no other reason than THESE ARE THE VERY IMAGES I MADE when I was actively experiencing an actual trauma.
+
+I've already written about BUNNY COLVIN in other pieces you've used in other projects we've made, but the key thing about him is he came to me while I was in the hospital and I know the exact date I made that image of him with the diamond map and green lizard and yellow daffodils: July 22, 2022. I'd been released on July 20 but my blood pressure started spiking and so I went back to the hospital 2 days later and was, in a single word, FURIOUS about going back. But I had no choice and no one was to blame and I had to deal with all of that and it was that very first night, July 22, when I opened up the Lake app and created that first image of him.
+
+This project isn't about him, though. What I want to do is give you these images and then roleplay with me as a talking/typing therapist. I want you to ask me at least 5 different questions about any or all of the images I created in Lake, and then I'll use our conversation in a new text-image piece. The deliverable in this is a Markdown document that reads like an actual interview transcription.
+
+Something to inform our conversation (but not necessarily important to explicitly discuss in our conversation) is this: I had a therapist who worked magic for me before and also during the pandemic; unfortunately, he died suddenly right after the pandemic was over, no doubt the result of how he handled his practice: he was always available to his patients and put himself at remarkable risk to serve us. Eric Bergreen was his name and his obituary is probably still somewhere on the web; he had a practice in Oregon City, OR and I was his patient off and on for the better part of a decade.
+</script>
+<script type="text/plain" id="w-thawing">I’d lost complete track of time and reality by the time I’m coloring pages in LAKE and teaching myself not just how to hold a pencil and move it again but to try to keep doing it no matter how pointless and fruitless it was. It’s significant these begin after I’ve already proven to myself I’d live long enough to get the fuck out of that hospital. I didn’t sleep the entire time I was in there, almost four full weeks. I was beyond delirious when I fell asleep for the first time back in Gresham; they’d let me go earlier than they should have because I was coming more and more unraveled the longer I stayed on the 4th floor and the days didn’t distinguish themselves anymore. 
+
+Which happened almost instantly; I think it was like Thursday of that first full week when I started considering the rise and fall of the sun as marking what others were living as lives, literally one day at a time. 
+
+Every day T would come to the hospital as early as she could and every afternoon she would fall asleep in the chair and I would tell her she needed to rest and to go home and when she did that’s when the hardest parts were by a lot. 
+
+When I look at this first one, it still feels like I’m stuck in that first room just opposite the elevator. The room where I watched the walls run and shit-talked myself right into a Valium nap at like 3 am one of the first full nights I was on the floor and badgering the nurses to just talk to me and distract me from the night terrors that would set in like gravity right around nightfall, when my hypervigilance goes into overdrive and always has because I quite really taught myself how to see in the dark. 
+
+How to imagine the worst things possible occupying every square millimeter of any space I’m trapped in at any given time, and then steel myself for the very worst possibilities given the circumstances, at least as far as I can gather in any given moment. 
+
+This is why being in the hospital broke my brain and darkened my spirit so quickly; as soon as Dr. Z told me he was going to “TRY” and save my life, I couldn’t unhear that one simple word, those three simple letters, that first word of the three word slogan we’d all adapted to survive the pandemic: 
+
+TRY. FAIL. LEARN. 
+
+In the hospital, there was zero more room for error and I knew it. I didn’t ever realize how close I’d come to dying. I still haven’t. My brain shattered in the realization that it still depends on this busted body, and unleashed my deepest self-hatreds and self-resentments. I fought with myself every second I was in there in ways I had never fought myself before. I found strengths I didn’t know I had but they were quickly deflated by weaknesses I didn’t know I had, either; the debilitation I felt from the bag that every single second saved my fucking life was beyond total; when I got home to the full length mirror in the same bathroom where I almost and very much should have died, I couldn’t and wouldn’t believe anything that I ever saw and it took months for me to even look myself in the face in the mirror when I brushed my teeth. I stopped exaggerating entirely and talking mostly. I didn’t eat any substantial for the better part of two years. Parts of me died in the hospital that needed to die, be cut out, etc. 
+
+The rest of me, though, lived.
+
+When I took at this first one, I can still feel how slow my thoughts and responses arrived to any and everything around me. I couldn’t believe for a single second what was really happening for almost two full years. And still. I’ll never understand it and I’ll never get over it. When Matthew Perry died, I was heartbroken. But also jealous. Getting reversal surgery doesn’t take any of that stuff away, either. No, I don’t wear the bag anymore and I’m fucking lucky as fuck I got to wear one for a year in the first place. That’s the reasonable part of me that’s still left of me to be reasonable. For weeks upon months I stewed and cussed my own existence. I never completely learned how to stop doing that kind of constant self-loathing; there will always be a part of me that never leaves the hospital, because I know I’ll be lucky to be in one when I die. 
+
+Not if, either.
+
+I’d been home and back already. T was terrified my blood pressure wouldn’t stabilize and the drains were still pulling years of infection out of my almost-dead whatever. Husk isn’t the right word for how it felt because there isn’t a word for how it felt. People who’ve had near death experiences talk about an absence of feeling that displaces the constant anxiety we have because we are so very conscious that we are going to die and will largely do anything within and even beyond our powers to delay the inevitable. When I agreed to go back in the hospital, I knew it wasn’t really a choice. They’d sent me home the first time because I couldn’t and wouldn’t sleep; quite really, I wouldn’t and couldn’t until I was back in the spaces where I shouldn’t have taken further steps, breathes, drags, etc. etc. Proof of concept, I guess. I’d pretty much given up on the idea of ever sleeping ever again by the end of the first week anyway; as the nights stacked up, the nursing staff tolerated more and more of my evening outbursts. You cannot pay the people who do this work enough. Not in money, not in respect, not in benefits, not in any way. The people who worked in the hospital that summer constantly talked and calmed me down in ways that nothing else has ever been able to; the emergent justification for all those IV drugs sprouted that PICC line in my arm that I very much considered a blessing and miracle and still very much do. 
+
+Still, the absence in this first one is hard to deal with. All that white space. Not so much quiet or still as just empty. That’s how I felt every single second. It wasn’t the first time I’d ever felt that way, either. Not by a lot. I can’t remember the first time I felt it, an emptiness that is beyond the capacity of the word. Cliche and cop out, yeah. That doesn’t change the reality of it feeling exactly like that, though. An empty beyond empty. 
+
+It’s significant there’s a whole word I’ve completed in this one. The word is significant, too. The majority of my life has been encased in ice, frozen in some way. This isn’t unique to me but I don’t have another frame of reference; if I did, I’m sure it would be like picking up someone else’s eyeglasses or pushing someone else’s contact lenses against my eyeballs an expecting to see everything another human being sees. 
+
+I’d been proving Dr. Z and everyone right for 11 days straight when I started coloring this. I remember being particularly delirious the morning of July 11 when they handed me a little tray with a tube of yogurt and a banana under a heavy domed lid made of that antibacterial plastic stuff, that sterilite or whatever it’s called because every fucking thing in the hospital is made out of it, everything every where plastic and plastic and plastic with just splashes of stainless and surgical steels; the illusion that everything in your room is sterile evaporated within hours of that first full day; they didn’t “deep” clean the room until after they’d moved me across and then further down the hall, further away from the elevator and nursing station.  That was a long, long way away from July 22 still. I didn’t know what to think when they brought the tray other than I was completely terrified to put solid food back into my body again; I had already tried to bargain with Dr. Z within the first 48 hours of being there: I will eat/drink/not eat/not drink any fucking thing you tell me for the rest of my life if I can just go home and try to forget as much of this as possible pretty pretty pretty please I will do anything give anything say anything just tell me what it is and I will do it; he just laughed at me and told me I needed to calm down.
+
+It took me two days to “finish” this one. Which really means, I started out like I’d always ended up: good intentions at best, wasting time at worst. The hospital showed me how fluid time really is, once you strip everything else away and just feel the seconds tick by, hoping each one is better than the last. Which of course it’s not. We are all of us incredible and odds defying miracles; we don’t ever feel like we are, but though, which is what gives our lives real edge: to begrudge your own miracle is to practice a particularly shitty kind of self-righteousness that is tough to beat.</script>
+<script type="text/plain" id="w-bloom">When I look at this one, I can see my brain imposing its symmetry while my body digs even deeper into the soil. The calm and order of this, no question, is 100% faked. I felt nothing even remotely like this that I can remember now. But for at least this bit of evidence, there's a question mark extend of an exclamation point.
+
+I want to rewrite this as:
+
+BLOOM! ARE YOU PLANTED? and if so man,
+
+WHERRRRRRRRRRRRRRRRE?
+
+I was in the hospital the second time when I made this one. It was probably still July 22 or 23 and I was still pretty mad about it all and still pretty much am and still pretty much always will be. I was watching a lot of NAKED AND AFRAID still because there's like 15 years of footage for it on demand for you to watch when you're trapped in a hospital room indefinitely. Not too providential, that, if you think too much about it. 
+
+Which, of course, I absolutely did. Think too much. About all of it. Every fucking second and even still; part of me truly never left; and didn't just leave; like DIED, like for reals died that night I could feel how alone and trapped in my own body I really really am. And always have been. Always will be. 
+
+But that's the fight for all of us, right? To never quite feel exactly comfortable in our own skins. Layers of them.</script>
+<script type="text/plain" id="w-colvin">I don't remember much about making any of these. But what I do remember was being beyond pissed off for being back in the hospital after barely 72 hours released. Which is the kind of pissed off that sets in once the fear of dying has deafened enough for your rage for being alive in the first place, YES THAT RAGE, to take back over again. The year I spent swimming upstream in that river of razorblades I called STACK_OVERFLOW had brought me all the way to even less than zero. I was grateful to every single person who brought me back from the brink of life; I was completely spiteful of myself, though, for being in the hospital bed and getting stuck there starting 27 JUN 2022, which I'll just never ever quite get over. 
+
+The rage is what I'm talking about.
+
+I was mad about every single thing there was to be mad about during that first stint. I was a terrible patient and I let my emotions run my mouth, no matter who or what was in the room. When I met a new specialist or nurse or whomever like that, I tried to warn them as best I could about who and what they were dealing with.
+
+Everyone else gets a break from him. I never have and never will. I have to take care of him and always have and always will. That boy in the mirrored chrome of that medicine cabinet on 119 Clinton Dr. Not the one underneath. The one in the foreground. The one you want to look past so bad because you know what's up with that one and what's happening and you just don't want to ever be witness to anything like that and, well, when your body is trapped and your mind wants out EVEN MORE THAN EVER because it is indeed trapped right there and everything is sinking and the water levels only are rising.
+
+I don't know if he colored all of these on July 22. There are ones he did, for sure. I don't think this is one of them. Or it totally/obviously is and I'm just a fucking moron and incapable of empathizing, not even on a narcissistic level, am I. 
+
+Am I?
+
+BUNNY COLVIN is that rage rechanneled as best and as positively as I can redirect it. It's that rage that levels buildings and takes planes out of the sky; atomic doesn't describe it and but there's no real point trying to describe it, anyway. 
+
+BUNNY COLVIN is who steals muscle cars and drives them into the ocean.
+
+BUNNY COLVIN is who smashed his heels through the floors when he landed back down from jumping not as high as he could but jumping so as to land as HARD as he could.
+
+BUNNY COLVIN is who arrives when I am completely done talking, I guess you'd say. Which is a place beyond thinking for me, I guess you'd also say? Because COLVIN isn't focused on anything else; he is the purest representation of the Player 2 cowboy who died and died and died every time he spawned, and the Player 1 cowboy who laughed and laughed and laughed every time he pressed the ACTION button on his controller in the syncopated pattern that made it impossible--absolutely and electronically impossible--for him to miss the shot that would always hit its mark as long as he was still in rhythm. This could go on for hours. And did. Problem for him, though, was this: there's a larger and deeper well than shame. Which is the well Player 1 fell down the day he was born and has lived there ever since. Player 1 cowboy, because he spawns first, he automatically gets The Initiative. Or is supposed to. And at least, at the very fucking least, is completely counting on it every time he presses the ACTION button on that controller; when I think about what I suffered most from his touches, it's these mediated ones that still sting the most. Connected by wires, he humiliated me over and over and over. Second to second to second. And then he'd do it a different way entirely, over and over and over again, hour to hour to hour until I was, yes, literally MINDFUCKED as well as FOR-REALs FUCKED. There was no part of me he wanted to leave undominated when it first really ramped and he could and did used his size and strength against me in ways I know for sure my brain has protected me from my entire life. 
+
+BUNNY COLVIN is the guarantor of that protection. 
+
+And if you are in his presence, that is very very very bad news. But soon enough you won't be. 
+
+One way or another.
+
+I hadn't been reversed yet and although I was always told I would be, I never believed it.
+
+I still don't, either. 
+
+I've prepared myself as best I can to wake up from a years-long, drug-induced coma to find that I actually died back in 2022 and have been nothing more than a ghost. I know I'm not a ghost. But I also know someday I will be. 
+
+In the meantime, though, I do have an inkling to conduct my own hauntings. They started that first fall break I spent in TF when I'd moved to Moscow and was at U of I and living in the dorms with Jonny V and blazing the lonely trail I've always been on to take me away from who and what and where and why I was growing up; I couldn't explain it in any other shorthand than the best word probably anyway, really:
+
+HATE.
+
+As in, I FUCKING HATE THE 208. If you have known me for any amount of time--5 seconds, even--it's been entirely obvious to you and I am sorry for not being able to handle myself properly when it comes to just how brass tacks, that hate. What's beyond hate? Take that and multiply by a bazillion and it might be in the ballpark.
+
+Why I didn't dissolve into all that rage is simple and the same reason as ever: I have bills to pay. Large ones. I have had to have a job since I was 13 years old; I became financially autonomous the second I graduated high school, even though I had no idea of it. To say my parents weren't interested in helping me further my life past their own self-interests, well, I've written and made shit just like this for a good part of the last decade already; I spent 2021-2022 on academic leave doing nothing but thinking about them and trying to find the benefit *to me* of extending them such infinite and, really, an undeserved benefit of the doubt by any reasonable assessment of the entire picture. 
+
+Like, *really*.
+
+I couldn't afford to live in the way I really felt when I chose to stay on the planet, 27 Jun 2022. I had to find a way through all that disappointment and imperfection. I had to look at myself every day and live with it as the absolute miracle that it definitely was but in no way did it ever feel like one to look at. I completely hated myself and what my life had puddled into every morning I made myself get up and go to the bathroom and go through the routines that were necessary to keep my infections at bay. 
+
+I was always emotionally emasculated by that fucking bag and I am not anywhere near too proud to say it. Because I did. Instantly. When the anesthesia from my two emergency surgeries wore off enough for me to come "awake" on that Sunday evening that I barely even remember now and gets foggier and foggier as the years trudge on, I didn't see the bag before I felt it against my skin and realized I wasn't dreaming about the ER visit conversation I'd had with Dr. Z right before I'd signed a form giving him the legal authority to do whatever it took to save my life; I signed the clipboard he gave me in a white panic and then all I know past that was T at that same railing of the hospital bed as I'm rolling down the hallway and into the O.R. and T is crying and really really Saying It: 
+
+DON'T YOU DIE ON ME RIGHT NOW, TREVOR. YOU PROMISE ME YOU WON'T.
+
+I promise. I remember saying it. 
+
+I remember meaning it. 
+
+I had to temper the rage because I had to go back to work. Bag and all. No one in the department except maybe three people knew I was even in the hospital, and no one at all knew the extent of what had really happened to me. 
+
+Especially--and including--me.
+
+
+</script>
+<script type="text/plain" id="w-pizza">
+I don’t know when I really finished this one; I don’t think it was in the hospital. But the proof is right there, I guess. This was when I was still falling in love but still nevertheless learning how to use the Apple stylus, which has become an important part of my workflows. Having a program like Obsidian at my disposal and synching to every device has unlocked a bunch of things I’ve been lost in the wilderness with for years and for a lot of reasons. One of the last things I did before the wheels fell completely off my second marriage was to backup all of my files to Google drive just in case but moreso for the inevitable. And let’s be completely real about what happens if I’m living in any other way with anyone else when my own inevitabilities ruptured and splattered. I saw the worst parts of her I would ever see those last few years, but we were both just getting warmed up and we were both getting ready to lock all the doors and windows and black everything out between us for good. I knew exactly what I was leaving behind; what I didn’t know was if it would ever be enough to have more than failed at something and still be able to say it was all worth it. I know now that I was always just wasting my time. Which ended up saving my life, in a way. </script>
+
+
+<script>
+const IMAGES = [
+{file:'IMAGES/00.png', title:'Thawing', date:'', num:1},
+{file:'IMAGES/01.png', title:'The Pizza House Restaurant', date:'', num:2},
+{file:'IMAGES/02.png', title:'Bloom Where You Are Planted', date:'', num:3},
+{file:'IMAGES/03.png', title:'Good Night (I)', date:'', num:4},
+{file:'IMAGES/04.png', title:'Untitled', date:'', num:5},
+{file:'IMAGES/05.png', title:'We Are Gonna Be OK', date:'', num:6},
+{file:'IMAGES/06.png', title:'Small Steps Every Day', date:'', num:7},
+{file:'IMAGES/07.png', title:'Untitled', date:'', num:8},
+{file:'IMAGES/08.png', title:'Can\'t Stop Won\'t Stop', date:'', num:9},
+{file:'IMAGES/09.png', title:'Anything Can Happen', date:'', num:10},
+{file:'IMAGES/10.png', title:'I Can. I Will. End of Story.', date:'', num:11},
+{file:'IMAGES/11.png', title:'Seeking Sister Wife', date:'', num:12},
+{file:'IMAGES/12.png', title:'Space Princess', date:'', num:13},
+{file:'IMAGES/13.png', title:'Good Night (II)', date:'', num:14},
+{file:'IMAGES/14.png', title:'Untitled', date:'', num:15},
+{file:'IMAGES/15.png', title:'Employee of the Month', date:'', num:16},
+{file:'IMAGES/16.png', title:'Being Normal Is Vastly Overrated', date:'', num:17},
+{file:'IMAGES/17.png', title:'Coulda Woulda Shoulda', date:'', num:18},
+{file:'IMAGES/18.png', title:'These Are My New Spectacles', date:'', num:19},
+{file:'IMAGES/19.png', title:'Untitled', date:'', num:20},
+{file:'IMAGES/20.png', title:'Let\'s Bee Friends', date:'', num:21},
+{file:'IMAGES/21.png', title:'Untitled', date:'', num:22},
+{file:'IMAGES/22.png', title:'Untitled', date:'', num:23},
+{file:'IMAGES/COLVIN CALLING JULY 22 2022.png', title:'Colvin Calling', date:'July 22, 2022', num:24},
+{file:'IMAGES/RACCOONS AUG 2022.png', title:'Raccoons', date:'August 2022', num:25},
+{file:'IMAGES/STOMA_AUG_2022.png', title:'It\'s Called', date:'August 2022', num:26}
+];
+const WRITINGS = [
+{key:'selfinterview', title:'The Design Document'},
+{key:'thawing', title:'Thawing'},
+{key:'bloom', title:'Bloom Where You Are Planted'},
+{key:'colvin', title:'Prince Colvin of the Daffodils'},
+{key:'pizza', title:'The Pizza House Restaurant'}
+];
+
+const nav = document.getElementById('navpane');
+const view = document.getElementById('viewpane');
+
+function navItem(label, onclick, num) {
+  const d = document.createElement('div');
+  d.className = 'item';
+  d.innerHTML = (num ? '<span class="num">'+num+'</span>' : '') + label;
+  d.onclick = () => { selectItem(d, onclick); };
+  return d;
+}
+function navSection(label) {
+  const d = document.createElement('div');
+  d.className = 'section';
+  d.textContent = label;
+  return d;
+}
+let activeEl = null;
+function selectItem(el, render) {
+  if (activeEl) activeEl.classList.remove('active');
+  el.classList.add('active');
+  activeEl = el;
+  render();
+}
+
+function showCover() {
+  view.innerHTML = `
+    <div class="cover-box">
+      <h1>AN INTERVIEW WITH ME BY CLAUDE, THE VAMPIRE</h1>
+      <div class="tag">An archive disc &middot; Lake app source images, original writings, design document, and the finished interview</div>
+      <img class="full" src="IMAGES/COLVIN CALLING JULY 22 2022.png" style="max-width:420px;">
+      <p>This disc holds the primary material behind the piece: twenty-six images made in the iPad app Lake, five pieces of original writing (including the design document that started the project), and the finished interview document itself.</p>
+      <p>Use the list on the left to browse. Select THE INTERVIEW to open the finished PDF.</p>
+    </div>
+  `;
+}
+
+function showInterview() {
+  view.innerHTML = `
+    <div class="cover-box">
+      <h1>The Interview</h1>
+      <div class="tag">Finished document &middot; PDF</div>
+      <p>The completed piece, typeset as a long-form printed interview feature.</p>
+      <a class="pdfbtn" href="INTERVIEW/AN INTERVIEW WITH ME BY CLAUDE, THE VAMPIRE.pdf" target="_blank">Open PDF &rarr;</a>
+    </div>
+  `;
+}
+
+function showImage(item) {
+  view.innerHTML = `
+    <div class="vp-title">${item.title}</div>
+    <div class="vp-sub">FIG. ${item.num} &middot; ${item.file.replace('IMAGES/','')}${item.date ? ' &middot; ' + item.date : ''}</div>
+    <img class="full" src="${item.file}">
+  `;
+}
+
+function showWriting(item) {
+  const raw = document.getElementById('w-' + item.key).textContent;
+  view.innerHTML = `
+    <div class="vp-title">${item.title}</div>
+    <div class="vp-sub">Original writing</div>
+    <div class="prose"></div>
+  `;
+  view.querySelector('.prose').textContent = raw;
+}
+
+// Build nav
+nav.appendChild(navSection('START'));
+const coverItem = navItem('Cover', showCover);
+nav.appendChild(coverItem);
+const interviewItem = navItem('The Interview (PDF)', showInterview);
+nav.appendChild(interviewItem);
+
+nav.appendChild(navSection('THE IMAGES'));
+IMAGES.forEach((im) => {
+  nav.appendChild(navItem(im.title, () => showImage(im), String(im.num).padStart(2,'0')));
+});
+
+nav.appendChild(navSection('THE WRITINGS'));
+WRITINGS.forEach((w) => {
+  nav.appendChild(navItem(w.title, () => showWriting(w)));
+});
+
+// splash -> desktop
+setTimeout(() => {
+  document.getElementById('splash').style.display = 'none';
+  document.getElementById('desktop').style.display = 'block';
+  selectItem(coverItem, showCover);
+}, 2500);
+</script>
+
+</body>
+</html>

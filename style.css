@@ -1,0 +1,59 @@
+:root {
+  --c64-bg: #40318D;      /* C64 palette color 6 */
+  --c64-fg: #6C5EB5;      /* palette color 14, brightened for a11y contrast */
+  --c64-bright: #9C90D9;  /* extra step up, for cursor/emphasis only */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--c64-bg);
+  color: var(--c64-fg);
+  font-family: 'VT323', monospace;
+  font-size: 22px;
+  line-height: 1.4;
+}
+
+.screen {
+  max-width: 800px;
+  margin: 3rem auto;
+  padding: 2rem;
+  border: 3px solid var(--c64-fg);
+  box-shadow: 0 0 0 6px var(--c64-bg), 0 0 0 9px var(--c64-fg);
+  min-height: 60vh;
+}
+
+.boot-line {
+  white-space: pre-wrap;
+  opacity: 0;
+}
+
+.boot-line.shown {
+  opacity: 1;
+}
+
+.cursor {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.1em;
+  background: var(--c64-bright);
+  vertical-align: text-bottom;
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+nav a {
+  color: var(--c64-bright);
+  text-decoration: none;
+  margin-right: 1.5rem;
+}
+nav a:hover, nav a:focus {
+  text-decoration: underline;
+}
+
+main { margin-top: 2rem; }

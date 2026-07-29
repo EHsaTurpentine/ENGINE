@@ -57,15 +57,3 @@ nav a:hover, nav a:focus {
 }
 
 main { margin-top: 2rem; }
-
-.countdown-label {
-  margin-top: 2rem;
-  margin-bottom: 0.25rem;
-  letter-spacing: 0.05em;
-}
-
-.countdown {
-  font-size: 1.8rem;
-  color: var(--c64-bright);
-  margin-top: 0;
-}

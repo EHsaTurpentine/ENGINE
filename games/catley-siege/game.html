@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>14 HOURS: THE CATLEY SIEGE</title>
+<style>
+  * { box-sizing: border-box; margin:0; padding:0; }
+  html,body {
+    background:#000;
+    color:#33ff66;
+    font-family: 'Courier New', monospace;
+    height:100%;
+    overflow:hidden;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  #wrap {
+    position:relative;
+    width:1200px;
+    max-width:100vw;
+  }
+  canvas {
+    display:block;
+    width:100%;
+    background:#000;
+    box-shadow: 0 0 40px rgba(51,255,102,0.15) inset, 0 0 20px rgba(51,255,102,0.3);
+    border: 1px solid #113322;
+  }
+  #scanlines {
+    pointer-events:none;
+    position:absolute;
+    inset:0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0) 0px,
+      rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.18) 3px,
+      rgba(0,0,0,0.18) 4px
+    );
+    mix-blend-mode: multiply;
+  }
+  #tensionOverlay {
+    pointer-events:none;
+    position:absolute;
+    inset:0;
+    background: radial-gradient(ellipse at center, rgba(255,0,0,0) 45%, rgba(180,0,0,0.55) 100%);
+    opacity:0;
+  }
+  #hud {
+    position:absolute;
+    top:0; left:0; right:0;
+    display:flex;
+    justify-content:space-between;
+    padding:10px 16px;
+    font-size:12px;
+    letter-spacing:1px;
+    text-shadow:0 0 6px #33ff66;
+    pointer-events:none;
+  }
+  #hud .block { line-height:1.6; }
+  .barrow { display:flex; align-items:center; gap:6px; margin-top:3px; }
+  .barlabel { width:62px; display:inline-block; font-size:11px; opacity:0.85; }
+  .bar {
+    width:130px; height:10px;
+    border:1px solid rgba(51,255,102,0.5);
+    background:rgba(0,20,8,0.6);
+    position:relative;
+    overflow:hidden;
+  }
+  .barfill {
+    height:100%;
+    width:100%;
+    background:#33ff66;
+    transition: width 0.15s linear, background 0.2s linear;
+  }
+  #hourbar-outer {
+    position:absolute;
+    top:0; left:0;
+    height:4px;
+    width:100%;
+    background:#0a1f0f;
+  }
+  #hourbar-inner {
+    height:100%;
+    background:#33ff66;
+    box-shadow:0 0 8px #33ff66;
+    width:100%;
+  }
+  #tensionLabel {
+    position:absolute;
+    top:10px; left:50%; transform:translateX(-50%);
+    font-size:13px;
+    letter-spacing:3px;
+    color:#ff5533;
+    text-shadow:0 0 10px #ff5533;
+    opacity:0;
+    animation: blinkTension 0.9s infinite;
+    pointer-events:none;
+  }
+  @keyframes blinkTension { 0%,100% { opacity:0.95; } 50% { opacity:0.35; } }
+  #overlay {
+    position:absolute;
+    inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    background:rgba(0,0,0,0.88);
+    padding:30px;
+  }
+  #overlay h1 {
+    font-size:28px;
+    color:#ffb000;
+    text-shadow:0 0 12px #ffb000;
+    margin-bottom:14px;
+    letter-spacing:2px;
+  }
+  #overlay p {
+    font-size:13px;
+    line-height:1.7;
+    max-width:680px;
+    color:#33ff66;
+    margin-bottom:8px;
+  }
+  #overlay .warn { color:#ff5533; }
+  #overlay .key { color:#33ffff; }
+  button#startBtn, button#retryBtn {
+    margin-top:20px;
+    background:#000;
+    border:2px solid #33ff66;
+    color:#33ff66;
+    font-family:inherit;
+    font-size:15px;
+    padding:10px 26px;
+    letter-spacing:2px;
+    cursor:pointer;
+    text-shadow:0 0 6px #33ff66;
+  }
+  button#startBtn:hover, button#retryBtn:hover {
+    background:#33ff66;
+    color:#000;
+  }
+  .hidden { display:none !important; }
+  #legend {
+    position:absolute;
+    bottom:8px;
+    left:16px;
+    font-size:10px;
+    color:#1f7a3d;
+    letter-spacing:0.5px;
+    pointer-events:none;
+  }
+  #vineg {
+    position:absolute;
+    bottom:8px;
+    right:16px;
+    font-size:12px;
+    letter-spacing:1px;
+    text-shadow:0 0 6px currentColor;
+    pointer-events:none;
+  }
+  #reassign {
+    position:absolute;
+    top:44%;
+    left:0; right:0;
+    text-align:center;
+    font-size:16px;
+    letter-spacing:2px;
+    color:#33ffff;
+    text-shadow:0 0 10px #33ffff;
+    pointer-events:none;
+    opacity:0;
+    transition:opacity 0.3s;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="1200" height="700"></canvas>
+  <div id="tensionOverlay"></div>
+  <div id="hourbar-outer"><div id="hourbar-inner"></div></div>
+  <div id="tensionLabel">HOLD — REINFORCEMENTS INBOUND</div>
+  <div id="hud">
+    <div class="block" id="hudLeft"></div>
+    <div class="block" id="hudRight" style="text-align:right;"></div>
+  </div>
+  <div id="reassign"></div>
+  <div id="legend">◆ HORSE ×10 (500HP MOUNT) &nbsp; ■ MULE ×20 (250HP) &nbsp; ● PIG ×30 (125HP) &nbsp; — cyan ring = YOU</div>
+  <div id="vineg"></div>
+  <div id="scanlines"></div>
+
+  <div id="overlay">
+    <h1>14 HOURS: THE CATLEY SIEGE</h1>
+    <p>You rode out of Camp Howard with 59 other fools, chasing a rumor of dead Chinese miners
+    and a killer nobody's named. Now you're pinned on a bald hilltop while
+    <span class="warn">Lieutenant Henry Catley</span> — your commanding officer —
+    is somewhere back at the fishing hole, unbothered.</p>
+    <p>You are <b>one</b> of the sixty — marked by a pulsing cyan ring. The other fifty-nine
+    mill around the hilltop on their own, dodging as best they can (which isn't great).
+    Hold this rock for <b>14 hours</b>. If your body goes down, you wake up as someone else still standing.
+    Only if all sixty fall is it over. The last two hours are the worst of it.</p>
+    <p><span class="key">ARROWS / WASD</span> — move your soldier &nbsp;&nbsp;
+    <span class="key">SPACE</span> — hurl a vinegar bottle at the nearest charging sniper (stuns him the rest of the hour, once per hour)</p>
+    <p>Walk over drifting <span style="color:#33ffff;">vinegar bottles</span> to halve that hour's thirst damage — company-wide.</p>
+    <button id="startBtn">RIDE OUT</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const hudLeft = document.getElementById('hudLeft');
+  const hudRight = document.getElementById('hudRight');
+  const hourbarInner = document.getElementById('hourbar-inner');
+  const vinegHud = document.getElementById('vineg');
+  const reassignEl = document.getElementById('reassign');
+  const tensionOverlay = document.getElementById('tensionOverlay');
+  const tensionLabel = document.getElementById('tensionLabel');
+
+  const PLATEAU = { cx: W/2, cy: H/2, rx: 520, ry: 305 };
+  const HOUR_MS = 20000;
+  const TOTAL_HOURS = 14;
+  const PLAYER_SPEED = 230;
+  const FODDER_BASE_SPEED = 58;
+  const SPR = 1.8; // sprite scale multiplier
+
+  let units = [];
+  let playerUnitId = null;
+  let snipers = [];
+  let fires = [];
+  let pickups = [];
+  let hour = 1;
+  let hourTimer = HOUR_MS;
+  let fireUnlocked = false;
+  let thirstUnlocked = false;
+  let vinegarThrowAvailable = true;
+  let collectedVinegarThisHour = false;
+  let running = false;
+  let gameOver = false;
+  let lastSniperSpawn = 0;
+  let lastFireSpawn = 0;
+  let lastPickupSpawn = 0;
+  let keys = {};
+  let stunFlashes = [];
+  let hitFlashes = [];
+  let shakeX = 0, shakeY = 0;
+
+  function randomPointInPlateau(marginFrac){
+    const m = marginFrac || 0;
+    const ang = Math.random()*Math.PI*2;
+    const d = Math.sqrt(Math.random()) * (1-m);
+    return { x: PLATEAU.cx + Math.cos(ang)*PLATEAU.rx*d, y: PLATEAU.cy + Math.sin(ang)*PLATEAU.ry*d };
+  }
+
+  function clampToPlateau(pos, radius){
+    const rx = Math.max(8, PLATEAU.rx - (radius||6));
+    const ry = Math.max(8, PLATEAU.ry - (radius||6));
+    const dx = (pos.x - PLATEAU.cx)/rx;
+    const dy = (pos.y - PLATEAU.cy)/ry;
+    const d2 = dx*dx + dy*dy;
+    if(d2 > 1){
+      const d = Math.sqrt(d2);
+      pos.x = PLATEAU.cx + (dx/d)*rx;
+      pos.y = PLATEAU.cy + (dy/d)*ry;
+    }
+  }
+
+  // ----- tension helpers -----
+  function tensionLevel(){
+    const aliveFrac = aliveUnits().length/60;
+    const hourTension = hour>=13 ? 1 : hour>=11 ? 0.5 : hour>=8 ? 0.22 : 0;
+    return Math.min(1, hourTension + (1-aliveFrac)*0.6);
+  }
+  function hourMultiplier(){
+    return hour>=13 ? 1.65 : hour>=11 ? 1.25 : 1;
+  }
+
+  function makeUnits(){
+    const arr = [];
+    const types = [
+      {name:'horse', hp:500, count:10},
+      {name:'mule',  hp:250, count:20},
+      {name:'pig',   hp:125, count:30}
+    ];
+    let id = 0;
+    types.forEach(t=>{
+      for(let i=0;i<t.count;i++){
+        const p = randomPointInPlateau(0.15);
+        arr.push({
+          id:id++, type:t.name, mountHP:t.hp, mountMax:t.hp, soldierHP:100, alive:true,
+          x:p.x, y:p.y, wanderTarget:randomPointInPlateau(0.15), wanderTimer: 1+Math.random()*2,
+          speedFactor: 0.6 + Math.random()*0.8
+        });
+      }
+    });
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [arr[i],arr[j]]=[arr[j],arr[i]];
+    }
+    return arr;
+  }
+
+  function resetGame(){
+    units = makeUnits();
+    playerUnitId = units[Math.floor(Math.random()*units.length)].id;
+    snipers = []; fires = []; pickups = [];
+    hour = 1; hourTimer = HOUR_MS;
+    fireUnlocked = false; thirstUnlocked = false;
+    vinegarThrowAvailable = true; collectedVinegarThisHour = false;
+    gameOver = false;
+    lastSniperSpawn = 0; lastFireSpawn = 0; lastPickupSpawn = 0;
+    stunFlashes = []; hitFlashes = [];
+  }
+
+  function aliveUnits(){ return units.filter(u=>u.alive); }
+  function getPlayerUnit(){ return units.find(u=>u.id===playerUnitId); }
+
+  function reassignPlayer(){
+    const pool = aliveUnits();
+    if(pool.length === 0) return false;
+    const next = pool[Math.floor(Math.random()*pool.length)];
+    playerUnitId = next.id;
+    reassignEl.textContent = 'YOU ARE NOW A ' + next.type.toUpperCase() + ' SOLDIER';
+    reassignEl.style.opacity = 1;
+    setTimeout(()=>{ reassignEl.style.opacity = 0; }, 1400);
+    return true;
+  }
+
+  function damageUnit(u, amount){
+    if(!u.alive) return;
+    if(u.mountHP > 0){
+      u.mountHP = Math.max(0, u.mountHP - amount);
+    } else {
+      u.soldierHP = Math.max(0, u.soldierHP - amount);
+    }
+    if(u.mountHP <= 0 && u.soldierHP <= 0){
+      u.alive = false;
+      hitFlashes.push({x:u.x,y:u.y,t:0});
+      if(u.id === playerUnitId) reassignPlayer();
+    }
+  }
+
+  function thirstDamageUnit(u, amount){
+    if(!u.alive) return;
+    if(u.mountHP > 0) u.mountHP = Math.max(0, u.mountHP - amount);
+    u.soldierHP = Math.max(0, u.soldierHP - amount);
+    if(u.soldierHP <= 0){
+      u.alive = false;
+      if(u.id === playerUnitId) reassignPlayer();
+    }
+  }
+
+  function randomEdgePoint(){
+    const side = Math.floor(Math.random()*4);
+    if(side===0) return {x: Math.random()*W, y: -10};
+    if(side===1) return {x: Math.random()*W, y: H+10};
+    if(side===2) return {x: -10, y: Math.random()*H};
+    return {x: W+10, y: Math.random()*H};
+  }
+
+  function spawnSniper(){
+    if(snipers.filter(s=>s.phase!=='fired').length >= (hour>=13?7:5)) return;
+    const pool = aliveUnits();
+    if(pool.length === 0) return;
+    const player = getPlayerUnit();
+    let targetUnit;
+    if(player && player.alive && Math.random() < 0.45){
+      targetUnit = player;
+    } else {
+      targetUnit = pool[Math.floor(Math.random()*pool.length)];
+    }
+    const edge = randomEdgePoint();
+    snipers.push({
+      edge,
+      targetId: targetUnit.id,
+      trackTime: 1000 + Math.random()*400,
+      lockTime: 450,
+      elapsed: 0,
+      phase: 'tracking',
+      lockX: 0, lockY: 0,
+      stunned: false,
+      dmg: 50 * (hour>=13 ? 1.3 : 1)
+    });
+  }
+
+  function fireParamsForHour(h){
+    return {
+      maxR: 30 + h*7,
+      growRate: (2.5 + h*0.45) * hourMultiplier(),
+      spawnGap: Math.max(1400, 5200 - h*280) / hourMultiplier(),
+      maxFires: Math.min(11, 3 + Math.floor(h/2))
+    };
+  }
+
+  function spawnFire(){
+    const p = randomPointInPlateau(0.3);
+    const fp = fireParamsForHour(hour);
+    fires.push({x:p.x, y:p.y, r: 8, maxR: fp.maxR + Math.random()*20, growRate: fp.growRate, tickAcc:0});
+  }
+
+  function spawnPickup(){
+    if(pickups.length >= 2) return;
+    const p = randomPointInPlateau(0.4);
+    pickups.push({x:p.x, y:p.y, r:8, pulse:0});
+  }
+
+  function throwVinegarAtNearestSniper(){
+    if(!vinegarThrowAvailable) return;
+    const player = getPlayerUnit();
+    if(!player) return;
+    let best=null, bestD=Infinity;
+    snipers.forEach(s=>{
+      if((s.phase==='tracking'||s.phase==='locked') && !s.stunned){
+        const t = units.find(u=>u.id===s.targetId);
+        const px = s.phase==='locked' ? s.lockX : (t?t.x:player.x);
+        const py = s.phase==='locked' ? s.lockY : (t?t.y:player.y);
+        const d = Math.hypot(px-player.x, py-player.y);
+        if(d<bestD){ bestD=d; best=s; }
+      }
+    });
+    if(best){
+      best.stunned = true;
+      vinegarThrowAvailable = false;
+      stunFlashes.push({x:best.edge.x,y:best.edge.y,t:0});
+    }
+  }
+
+  function startNewHour(){
+    hour += 1;
+    hourTimer = HOUR_MS;
+    vinegarThrowAvailable = true;
+    if(hour >= 3) thirstUnlocked = true;
+    if(hour >= 4) fireUnlocked = true;
+    if(thirstUnlocked){
+      const amt = (collectedVinegarThisHour ? 5 : 10) * (hour>=13?1.2:1);
+      aliveUnits().forEach(u => thirstDamageUnit(u, amt));
+    }
+    collectedVinegarThisHour = false;
+  }
+
+  let lastTime = 0;
+
+  function updatePlayerMovement(dt){
+    const p = getPlayerUnit();
+    if(!p || !p.alive) return;
+    let dx=0, dy=0;
+    if(keys['arrowup']||keys['w']) dy -= 1;
+    if(keys['arrowdown']||keys['s']) dy += 1;
+    if(keys['arrowleft']||keys['a']) dx -= 1;
+    if(keys['arrowright']||keys['d']) dx += 1;
+    if(dx||dy){
+      const len = Math.hypot(dx,dy);
+      p.x += (dx/len)*PLAYER_SPEED*dt;
+      p.y += (dy/len)*PLAYER_SPEED*dt;
+      clampToPlateau(p, 10);
+    }
+  }
+
+  function updateFodderAI(dt){
+    units.forEach(u=>{
+      if(!u.alive || u.id === playerUnitId) return;
+      let fleeX=0, fleeY=0, fleeing=false;
+      snipers.forEach(s=>{
+        if(s.phase==='locked' && !s.stunned){
+          const d = Math.hypot(u.x-s.lockX, u.y-s.lockY);
+          if(d < 60){ fleeX += (u.x-s.lockX); fleeY += (u.y-s.lockY); fleeing = true; }
+        }
+      });
+      fires.forEach(f=>{
+        const d = Math.hypot(u.x-f.x, u.y-f.y);
+        if(d < f.r + 50){ fleeX += (u.x-f.x); fleeY += (u.y-f.y); fleeing = true; }
+      });
+      let vx=0, vy=0;
+      if(fleeing){
+        const len = Math.hypot(fleeX,fleeY) || 1;
+        vx = fleeX/len; vy = fleeY/len;
+      } else {
+        u.wanderTimer -= dt;
+        const dToTarget = Math.hypot(u.wanderTarget.x-u.x, u.wanderTarget.y-u.y);
+        if(u.wanderTimer <= 0 || dToTarget < 10){
+          u.wanderTarget = randomPointInPlateau(0.15);
+          u.wanderTimer = 1.5 + Math.random()*2.5;
+        }
+        const len = dToTarget || 1;
+        vx = (u.wanderTarget.x-u.x)/len;
+        vy = (u.wanderTarget.y-u.y)/len;
+      }
+      const speed = FODDER_BASE_SPEED * u.speedFactor * (fleeing?1.4:1);
+      u.x += vx*speed*dt;
+      u.y += vy*speed*dt;
+      clampToPlateau(u, 8);
+    });
+  }
+
+  function update(dt, now){
+    if(!running || gameOver) return;
+
+    updatePlayerMovement(dt);
+    updateFodderAI(dt);
+
+    hourTimer -= dt*1000;
+    if(hourTimer <= 0){
+      if(hour >= TOTAL_HOURS){ endGame(true); return; }
+      startNewHour();
+    }
+
+    const sniperGap = Math.max(500, (1550 - hour*65) / hourMultiplier());
+    if(now - lastSniperSpawn > sniperGap){ spawnSniper(); lastSniperSpawn = now; }
+
+    if(fireUnlocked){
+      const fp = fireParamsForHour(hour);
+      if(now - lastFireSpawn > fp.spawnGap && fires.length < fp.maxFires){
+        spawnFire(); lastFireSpawn = now;
+      }
+    }
+
+    if(now - lastPickupSpawn > 9000){ spawnPickup(); lastPickupSpawn = now; }
+
+    snipers.forEach(s=>{
+      s.elapsed += dt*1000;
+      if(s.phase === 'tracking'){
+        let t = units.find(u=>u.id===s.targetId);
+        if(!t || !t.alive){
+          const pool = aliveUnits();
+          if(pool.length){ t = pool[Math.floor(Math.random()*pool.length)]; s.targetId = t.id; }
+        }
+        if(t){ s.liveX = t.x; s.liveY = t.y; }
+        if(s.elapsed >= s.trackTime){
+          s.phase = 'locked';
+          s.lockX = s.liveX !== undefined ? s.liveX : s.edge.x;
+          s.lockY = s.liveY !== undefined ? s.liveY : s.edge.y;
+          s.elapsed = 0;
+        }
+      } else if(s.phase === 'locked'){
+        if(s.elapsed >= s.lockTime){
+          s.phase = 'fired';
+          if(!s.stunned){
+            let victim=null, bestD=24;
+            aliveUnits().forEach(u=>{
+              const d = Math.hypot(u.x-s.lockX, u.y-s.lockY);
+              if(d < bestD){ bestD = d; victim = u; }
+            });
+            if(victim) damageUnit(victim, s.dmg);
+          }
+        }
+      }
+    });
+    snipers = snipers.filter(s => s.phase !== 'fired' || s.elapsed < s.lockTime + 250);
+
+    fires.forEach(f=>{
+      if(f.r < f.maxR) f.r += f.growRate*dt;
+      f.tickAcc += dt*1000;
+      if(f.tickAcc >= 500){
+        f.tickAcc = 0;
+        const mult = hourMultiplier();
+        aliveUnits().forEach(u=>{
+          const d = Math.hypot(u.x-f.x, u.y-f.y);
+          if(d < f.r + 8){
+            const closeness = 1 - (d/(f.r+8));
+            damageUnit(u, (2 + closeness*8) * mult);
+          }
+        });
+      }
+    });
+
+    pickups.forEach(p=>p.pulse += dt*4);
+    pickups = pickups.filter(p=>{
+      let taken = false;
+      aliveUnits().forEach(u=>{ if(!taken && Math.hypot(u.x-p.x,u.y-p.y) < 18) taken = true; });
+      if(taken) collectedVinegarThisHour = true;
+      return !taken;
+    });
+
+    stunFlashes.forEach(f=>f.t+=dt); stunFlashes = stunFlashes.filter(f=>f.t<0.5);
+    hitFlashes.forEach(f=>f.t+=dt); hitFlashes = hitFlashes.filter(f=>f.t<0.35);
+
+    const tension = tensionLevel();
+    const shakeMag = tension*5;
+    shakeX = (Math.random()*2-1)*shakeMag;
+    shakeY = (Math.random()*2-1)*shakeMag;
+    tensionOverlay.style.opacity = tension * (0.55 + 0.45*Math.sin(now/200));
+    tensionLabel.style.opacity = hour>=13 ? 1 : 0;
+
+    if(aliveUnits().length === 0) endGame(false);
+  }
+
+  function endGame(won){ running = false; gameOver = true; showEndOverlay(won); }
+
+  function drawEllipseOutline(cx,cy,rx,ry,color,width){
+    ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+  }
+
+  function healthColor(frac){
+    if(frac > 0.66) return '#33ff66';
+    if(frac > 0.33) return '#ffb000';
+    return '#ff5533';
+  }
+
+  function draw(){
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+    ctx.clearRect(-10,-10,W+20,H+20);
+
+    ctx.strokeStyle = 'rgba(51,255,102,0.06)';
+    ctx.lineWidth = 1;
+    for(let gx=0; gx<W; gx+=50){ ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+    for(let gy=0; gy<H; gy+=50){ ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
+
+    drawEllipseOutline(PLATEAU.cx, PLATEAU.cy, PLATEAU.rx, PLATEAU.ry, '#1f7a3d', 2);
+    drawEllipseOutline(PLATEAU.cx, PLATEAU.cy, PLATEAU.rx-16, PLATEAU.ry-16, 'rgba(31,122,61,0.4)', 1);
+
+    fires.forEach(f=>{
+      const flick = 0.75 + Math.random()*0.25;
+      ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2);
+      ctx.strokeStyle = `rgba(255,85,51,${flick})`; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(f.x,f.y,f.r*0.5,0,Math.PI*2);
+      ctx.strokeStyle = `rgba(255,176,0,${flick*0.8})`; ctx.stroke();
+    });
+
+    pickups.forEach(p=>{
+      const s = 9 + Math.sin(p.pulse)*2;
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(Math.PI/4);
+      ctx.strokeStyle = '#33ffff'; ctx.lineWidth = 2;
+      ctx.strokeRect(-s/2,-s/2,s,s);
+      ctx.restore();
+    });
+
+    snipers.forEach(s=>{
+      if(s.phase === 'tracking'){
+        const t = units.find(u=>u.id===s.targetId);
+        const tx = t ? t.x : s.edge.x, ty = t ? t.y : s.edge.y;
+        ctx.setLineDash([6,6]);
+        ctx.strokeStyle = s.stunned ? 'rgba(120,120,120,0.5)' : 'rgba(255,176,0,0.55)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(s.edge.x, s.edge.y); ctx.lineTo(tx, ty); ctx.stroke();
+        ctx.setLineDash([]);
+      } else if(s.phase === 'locked'){
+        const prog = s.elapsed / s.lockTime;
+        ctx.strokeStyle = s.stunned ? 'rgba(120,120,120,0.6)' : 'rgba(255,85,51,0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4,4]);
+        ctx.beginPath(); ctx.moveTo(s.edge.x, s.edge.y); ctx.lineTo(s.lockX, s.lockY); ctx.stroke();
+        ctx.setLineDash([]);
+        const ringR = 24 * (1-prog) + 6;
+        ctx.beginPath(); ctx.arc(s.lockX, s.lockY, ringR, 0, Math.PI*2);
+        ctx.strokeStyle = s.stunned ? 'rgba(120,120,120,0.7)' : '#ff5533';
+        ctx.lineWidth = 2; ctx.stroke();
+      }
+      ctx.save(); ctx.translate(s.edge.x, s.edge.y);
+      ctx.beginPath(); ctx.moveTo(0,-7); ctx.lineTo(7,7); ctx.lineTo(-7,7); ctx.closePath();
+      ctx.strokeStyle = s.stunned ? '#666' : '#ffb000'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    });
+
+    stunFlashes.forEach(f=>{
+      const r = 6 + f.t*60;
+      ctx.beginPath(); ctx.arc(f.x,f.y,r,0,Math.PI*2);
+      ctx.strokeStyle = `rgba(51,255,255,${1-f.t*2})`; ctx.lineWidth = 2; ctx.stroke();
+    });
+
+    units.forEach(u=>{
+      if(!u.alive) return;
+      const hpFrac = u.mountHP > 0 ? (u.soldierHP/100)*0.4 + (u.mountHP/u.mountMax)*0.6 : (u.soldierHP/100);
+      const color = healthColor(hpFrac);
+      const isPlayer = u.id === playerUnitId;
+      const barW = isPlayer ? 26 : 16;
+      const barY = u.y - (isPlayer ? 20 : 13);
+
+      // mini health bar above every unit
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(u.x-barW/2, barY, barW, 3);
+      ctx.fillStyle = color;
+      ctx.fillRect(u.x-barW/2, barY, barW*Math.max(0,hpFrac), 3);
+
+      if(isPlayer){
+        const pulse = 13 + Math.sin(performance.now()/180)*2.5;
+        ctx.beginPath(); ctx.arc(u.x, u.y, pulse, 0, Math.PI*2);
+        ctx.strokeStyle = '#33ffff'; ctx.lineWidth = 2; ctx.stroke();
+      }
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isPlayer ? 2.2 : 1.7;
+      ctx.beginPath();
+      if(u.type === 'horse'){
+        const s = 7*SPR;
+        ctx.moveTo(u.x, u.y-s); ctx.lineTo(u.x+s*0.85, u.y+s*0.7); ctx.lineTo(u.x-s*0.85, u.y+s*0.7); ctx.closePath();
+      } else if(u.type === 'mule'){
+        const s = 5.5*SPR;
+        ctx.rect(u.x-s/2, u.y-s/2, s, s);
+      } else {
+        ctx.arc(u.x, u.y, 4.2*SPR, 0, Math.PI*2);
+      }
+      ctx.stroke();
+    });
+
+    hitFlashes.forEach(f=>{
+      ctx.beginPath(); ctx.arc(f.x,f.y, 12+f.t*45, 0, Math.PI*2);
+      ctx.strokeStyle = `rgba(255,85,51,${1-f.t*2.8})`; ctx.lineWidth = 2; ctx.stroke();
+    });
+
+    ctx.restore();
+    updateHud();
+  }
+
+  function barEl(id){ return document.getElementById(id); }
+
+  function ensureHudStructure(){
+    hudLeft.innerHTML = `
+      <div id="hourText"></div>
+      <div class="barrow"><span class="barlabel">COMPANY</span><div class="bar"><div class="barfill" id="companyFill"></div></div><span id="companyCount" style="font-size:11px;margin-left:4px;"></span></div>
+      <div class="barrow"><span class="barlabel">MOUNT</span><div class="bar"><div class="barfill" id="mountFill"></div></div></div>
+      <div class="barrow"><span class="barlabel">SOLDIER</span><div class="bar"><div class="barfill" id="soldierFill"></div></div></div>
+    `;
+  }
+  ensureHudStructure();
+
+  function updateHud(){
+    const alive = aliveUnits().length;
+    const p = getPlayerUnit();
+    barEl('hourText').textContent = `HOUR ${Math.min(hour,TOTAL_HOURS)} / ${TOTAL_HOURS}`;
+    const companyFrac = alive/60;
+    const companyFill = barEl('companyFill');
+    companyFill.style.width = (companyFrac*100) + '%';
+    companyFill.style.background = healthColor(companyFrac);
+    barEl('companyCount').textContent = alive + '/60';
+
+    const mountFill = barEl('mountFill');
+    const soldierFill = barEl('soldierFill');
+    if(p && p.alive){
+      const mf = p.mountHP/p.mountMax;
+      const sf = p.soldierHP/100;
+      mountFill.style.width = (mf*100)+'%';
+      mountFill.style.background = healthColor(mf);
+      soldierFill.style.width = (sf*100)+'%';
+      soldierFill.style.background = healthColor(sf);
+    } else {
+      mountFill.style.width = '0%';
+      soldierFill.style.width = '0%';
+    }
+
+    const status = [];
+    if(thirstUnlocked) status.push('<span style="color:#ffb000">THIRST ACTIVE</span>');
+    if(fireUnlocked) status.push('<span style="color:#ff5533">FIRE SPREADING</span>');
+    hudRight.innerHTML = status.join('<br>') || '&nbsp;';
+    hourbarInner.style.width = Math.max(0,(hourTimer/HOUR_MS)*100) + '%';
+    vinegHud.textContent = vinegarThrowAvailable ? 'VINEGAR: READY [SPACE]' : 'VINEGAR: SPENT THIS HOUR';
+    vinegHud.style.color = vinegarThrowAvailable ? '#33ffff' : '#555';
+  }
+
+  function showEndOverlay(won){
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = '';
+    const h1 = document.createElement('h1');
+    const p1 = document.createElement('p');
+    const p2 = document.createElement('p');
+    const btn = document.createElement('button');
+    btn.id = 'retryBtn';
+    btn.textContent = 'RIDE OUT AGAIN';
+    const alive = aliveUnits().length;
+
+    if(won){
+      h1.textContent = 'RELIEF ARRIVES';
+      h1.style.color = '#33ff66'; h1.style.textShadow = '0 0 12px #33ff66';
+      p1.innerHTML = `Sixty fresh riders crest the ridge. ${alive} of your company are still breathing.`;
+      p2.innerHTML = 'You will personally see to it that <span class="warn">Lieutenant Henry Catley</span> answers for this at a court-martial. Some say he never even reeled in his line.';
+    } else {
+      h1.textContent = 'THE HILL IS SILENT';
+      h1.style.color = '#ff5533'; h1.style.textShadow = '0 0 12px #ff5533';
+      p1.textContent = 'All sixty are down. No one is left to carry word off this rock.';
+      p2.innerHTML = '<span class="warn">Hank Catley</span> remains, as ever, a coward — and now, unaccountable.';
+    }
+    overlay.appendChild(h1); overlay.appendChild(p1); overlay.appendChild(p2); overlay.appendChild(btn);
+    btn.addEventListener('click', ()=>{
+      overlay.classList.add('hidden');
+      resetGame();
+      ensureHudStructure();
+      running = true;
+    });
+  }
+
+  window.addEventListener('keydown', e=>{
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    if(k===' '){ e.preventDefault(); if(running && !gameOver) throwVinegarAtNearestSniper(); }
+  });
+  window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+  startBtn.addEventListener('click', ()=>{
+    overlay.classList.add('hidden');
+    resetGame();
+    ensureHudStructure();
+    running = true;
+  });
+
+  function loop(ts){
+    if(!lastTime) lastTime = ts;
+    const dt = Math.min(0.05, (ts-lastTime)/1000);
+    lastTime = ts;
+    update(dt, ts);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

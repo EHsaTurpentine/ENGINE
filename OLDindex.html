@@ -20,9 +20,7 @@
     <main>
       <h1>THIS IS THE INDIFFERENCE ENGINE.</h1>
       <p>POST TENEBRAS LUX ESTO UMBRAS FINDENS.</p>
-
-      <p class="countdown-label">ENDS IN:</p>
-      <p id="countdown" class="countdown" aria-live="polite">CALCULATING...</p>
+  
     </main>
   </div>
 </div>
@@ -78,38 +76,6 @@
     }
     typeLine();
   }
-
-  // --- Countdown timer: public access ends at the start of next month ---
-  // Edit the line below whenever the "public until" date changes.
-  // Uses each visitor's own local time zone.
-  var deadline = new Date('2026-08-01T00:00:00');
-
-  var countdownEl = document.getElementById('countdown');
-
-  function updateCountdown() {
-    var now = new Date();
-    var diff = deadline - now;
-
-    if (diff <= 0) {
-      countdownEl.textContent = 'PUBLIC ACCESS PERIOD HAS ENDED';
-      clearInterval(countdownTick);
-      return;
-    }
-
-    var totalSeconds = Math.floor(diff / 1000);
-    var days = Math.floor(totalSeconds / 86400);
-    var hours = Math.floor((totalSeconds % 86400) / 3600);
-    var minutes = Math.floor((totalSeconds % 3600) / 60);
-    var seconds = totalSeconds % 60;
-
-    function pad(n) { return n < 10 ? '0' + n : n; }
-
-    countdownEl.textContent =
-      days + 'D ' + pad(hours) + 'H ' + pad(minutes) + 'M ' + pad(seconds) + 'S';
-  }
-
-  updateCountdown();
-  var countdownTick = setInterval(updateCountdown, 1000);
 </script>
 
 <noscript>

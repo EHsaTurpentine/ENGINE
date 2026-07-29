@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>THE INDIFFERENCE ENGINE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --c64-bg: #40318D;      /* C64 palette color 6 */
+    --c64-fg: #6C5EB5;      /* palette color 14, brightened for a11y contrast */
+    --c64-bright: #9C90D9;  /* extra step up, for cursor/emphasis only */
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--c64-bg);
+    color: var(--c64-fg);
+    font-family: 'VT323', monospace;
+    font-size: 22px;
+    line-height: 1.4;
+  }
+
+  .screen {
+    max-width: 800px;
+    margin: 3rem auto;
+    padding: 2rem;
+    border: 3px solid var(--c64-fg);
+    box-shadow: 0 0 0 6px var(--c64-bg), 0 0 0 9px var(--c64-fg);
+    min-height: 60vh;
+  }
+
+  .boot-line {
+    white-space: pre-wrap;
+    opacity: 0;
+  }
+
+  .boot-line.shown {
+    opacity: 1;
+  }
+
+  .cursor {
+    display: inline-block;
+    width: 0.6em;
+    height: 1.1em;
+    background: var(--c64-bright);
+    vertical-align: text-bottom;
+    animation: blink 1s steps(1) infinite;
+  }
+
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+
+  nav a {
+    color: var(--c64-bright);
+    text-decoration: none;
+    margin-right: 1.5rem;
+  }
+  nav a:hover, nav a:focus {
+    text-decoration: underline;
+  }
+
+  main { margin-top: 2rem; }
+
+  /* Respect reduced motion and no-JS: show final state immediately */
+  .no-js .boot-sequence,
+  @media (prefers-reduced-motion: reduce) {
+    /* handled below via JS + this class for the no-motion case */
+  }
+</style>
+</head>
+<body class="no-js">
+<div class="screen">
+  <pre id="boot" aria-hidden="true"></pre>
+
+  <div id="content" hidden>
+    <nav>
+      <a href="/">HOME</a><a href="/archive/">ARCHIVE</a>
+    </nav>
+    <main>
+      <h1>THE INDIFFERENCE ENGINE</h1>
+      <p>A personal archive. Built by hand, one page at a time.</p>
+    </main>
+  </div>
+</div>
+
+<script>
+  // Boot sequence: "LOAD"THE INDIFFERENCE ENGINE",8" -> "RUN" -> reveal content.
+  // Skips straight to final state if the user prefers reduced motion,
+  // or if JS never runs at all (the <noscript> below handles that case).
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var bootEl = document.getElementById('boot');
+  var contentEl = document.getElementById('content');
+  document.body.classList.remove('no-js');
+
+  function reveal() {
+    bootEl.style.display = 'none';
+    contentEl.hidden = false;
+  }
+
+  if (reduceMotion) {
+    reveal();
+  } else {
+    var lines = [
+      'LOAD"THE INDIFFERENCE ENGINE",8',
+      'SEARCHING FOR THE INDIFFERENCE ENGINE',
+      'LOADING',
+      'READY.',
+      'RUN'
+    ];
+    var i = 0;
+    var typed = '';
+
+    function typeLine() {
+      if (i >= lines.length) {
+        setTimeout(reveal, 400);
+        return;
+      }
+      var line = lines[i];
+      var c = 0;
+      typed += (i > 0 ? '\n' : '');
+      var interval = setInterval(function () {
+        if (c < line.length) {
+          typed += line[c];
+          bootEl.textContent = typed;
+          c++;
+        } else {
+          clearInterval(interval);
+          i++;
+          setTimeout(typeLine, 250);
+        }
+      }, 35);
+    }
+    typeLine();
+  }
+</script>
+
+<noscript>
+  <style>
+    #boot { display: none; }
+    #content { display: block !important; }
+  </style>
+</noscript>
+</body>
+</html>

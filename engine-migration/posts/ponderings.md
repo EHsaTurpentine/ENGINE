@@ -1,6 +1,0 @@
----
-title: "PONDERINGS"
-date: 2026-03-21
-slug: ponderings
----
-![](/assets/img/2026/03/img_4353.jpg)

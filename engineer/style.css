@@ -1,0 +1,228 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;700&display=swap');
+
+:root {
+  --bg: #40318d;
+  --fg: #cbc2ff;
+  --dim: #9a8fe0;
+  --bright: #ffffff;
+  --accent: #ffe066;
+  --border: #cbc2ff;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: #000;
+}
+
+body {
+  padding: 1.5rem 1rem;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.pixel {
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-weight: 400;
+}
+
+.crt {
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  background: #000;
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.screen {
+  background: var(--bg);
+  color: var(--fg);
+  padding: 2.5rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+@media (max-width: 700px) {
+  body { padding: 0.5rem; }
+  .crt { padding: 5px; }
+  .screen { padding: 1.25rem; }
+}
+
+/* ---- header ---- */
+.site-title {
+  display: block;
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 1.5rem;
+  line-height: 1.6;
+  color: var(--bright);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  margin-bottom: 1rem;
+  text-shadow: 2px 2px 0 rgba(0,0,0,0.35);
+}
+
+.tagline {
+  color: var(--dim);
+  margin: 0 0 1.5rem;
+  font-size: 0.9rem;
+}
+.tagline .rem { color: #8a7fce; }
+
+.topnav a {
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 700;
+  margin-right: 1.5rem;
+  font-size: 0.95rem;
+}
+.topnav a:hover { color: var(--bright); }
+
+hr.double {
+  border: none;
+  border-top: 3px double var(--fg);
+  margin: 1.5rem 0 2rem;
+}
+
+/* ---- layout ---- */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 2.5rem;
+}
+.entries, .sidebar {
+  min-width: 0;
+}
+@media (max-width: 820px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+/* ---- entries (index) ---- */
+.entry {
+  margin-bottom: 2rem;
+}
+
+.entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.line-no {
+  color: var(--dim);
+  font-size: 1.4rem;
+}
+
+.entry h2 {
+  margin: 0;
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.entry h2 a { color: inherit; text-decoration: none; }
+.entry h2 a:hover { color: var(--bright); }
+
+.entry-date {
+  color: var(--dim);
+  margin: 0 0 0.75rem;
+}
+
+.excerpt { margin: 0 0 0.75rem; line-height: 1.5; }
+
+.run-link {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.run-link:hover { color: var(--bright); }
+
+.divider {
+  border: none;
+  border-top: 2px dotted var(--dim);
+  margin: 2rem 0;
+}
+
+/* ---- sidebar ---- */
+.sidebar h3 {
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 0.8rem;
+  color: var(--fg);
+  text-transform: uppercase;
+  margin: 2rem 0 1rem;
+  line-height: 1.5;
+}
+.sidebar h3:first-child { margin-top: 0; }
+
+.search-form {
+  display: flex;
+  gap: 0;
+}
+.search-form input {
+  flex: 1;
+  border: none;
+  padding: 0.6rem;
+  font-family: inherit;
+  font-weight: 700;
+}
+.search-form button {
+  border: none;
+  background: var(--dim);
+  color: #000;
+  font-family: inherit;
+  font-weight: 700;
+  padding: 0 1rem;
+  cursor: pointer;
+}
+.search-form button:hover { background: var(--fg); }
+
+.no-results { color: var(--dim); }
+
+.recent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.recent-list li { margin-bottom: 0.6rem; }
+.recent-list a {
+  color: var(--bright);
+  text-decoration: underline;
+}
+.recent-list a:hover { color: var(--accent); }
+
+/* ---- single post/page ---- */
+.single { max-width: 640px; }
+.entry-title {
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 1.3rem;
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+}
+.meta { color: var(--dim); margin-bottom: 1.5rem; }
+
+.content img, .content video {
+  max-width: 100%;
+  display: block;
+  margin: 1rem 0;
+  border: 2px solid var(--fg);
+}
+.content a { color: var(--accent); }
+
+/* ---- responsive type ---- */
+@media (max-width: 820px) {
+  .site-title { font-size: 1.15rem; }
+  .entry h2 { font-size: 0.9rem; }
+  .entry-title { font-size: 1.05rem; }
+}
+@media (max-width: 480px) {
+  .site-title { font-size: 0.95rem; }
+  .tagline { font-size: 0.75rem; }
+  .entry h2 { font-size: 0.8rem; }
+  .entry-title { font-size: 0.9rem; }
+  .topnav a { font-size: 0.8rem; margin-right: 1rem; }
+  .entry-head { flex-wrap: wrap; }
+  .line-no { font-size: 1.1rem; }
+}

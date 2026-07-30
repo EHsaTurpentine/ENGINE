@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<!-- ============================================================
+     PAGE TEMPLATE — THE INDIFFERENCE ENGINEER
+     Duplicate this file per page (e.g. field-notes/some-post.html).
+     Edit only the sections marked EDIT. Everything else (fonts,
+     tokens, seal, footer) is shared site chrome — keep it as-is
+     so every page stays visually consistent with the homepage.
+     ============================================================ -->
+
+<title>PAGE TITLE — THE INDIFFERENCE ENGINEER</title> <!-- EDIT -->
+<meta name="description" content="ONE-LINE PAGE DESCRIPTION" /> <!-- EDIT -->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0b0c;
+    --panel: #131518;
+    --line: #2a2c2f;
+    --line-soft: #1a1c1e;
+    --ink: #e9e7e1;
+    --ink-dim: #83868a;
+    --ink-faint: #4c4e51;
+    --accent: #e3a548;
+    --accent-dim: #6b5527;
+    --hover: #9c90d9;      /* C64 bright accent — used for interactive/hover states */
+    --hover-dim: #6c5eb5;  /* C64 border/text blue — dimmed companion */
+    --nav-line: rgba(108, 94, 181, .55); /* C64 border/text blue, #6C5EB5, from the ENGINE site */
+    --maxw: 680px;
+  }
+
+  *{ box-sizing: border-box; }
+  html, body{ margin:0; padding:0; background: var(--bg); color: var(--ink); }
+
+  body{
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    background-image:
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size: 42px 42px;
+    background-position: center;
+    min-height: 100vh;
+  }
+
+  /* ---------- site header — same on every page ---------- */
+  header.site{
+    display:flex;
+    justify-content:center;
+    padding: 28px 6vw 0;
+  }
+  header.site a{
+    font-family:"Unbounded", sans-serif;
+    font-weight:600;
+    font-size: 13px;
+    letter-spacing:.04em;
+    color: var(--ink-dim);
+    text-decoration:none;
+    transition: color .25s ease;
+  }
+  header.site a:hover, header.site a:focus{ color: var(--hover); }
+  header.site a .arrow{ margin-right:6px; color: var(--ink-faint); }
+
+  /* ---------- article ---------- */
+  main{
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 60px 6vw 100px;
+  }
+
+  .meta{
+    font-size: 11px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 14px;
+  }
+
+  h1{
+    font-family:"Unbounded", sans-serif;
+    font-weight:800;
+    font-size: clamp(28px, 5vw, 42px);
+    line-height:1.15;
+    letter-spacing:-.01em;
+    color: var(--ink);
+    margin: 0 0 40px;
+  }
+
+  h2{
+    font-family:"Unbounded", sans-serif;
+    font-weight:600;
+    font-size: clamp(19px, 3vw, 23px);
+    color: var(--ink);
+    margin: 52px 0 16px;
+  }
+
+  h3{
+    font-family:"Unbounded", sans-serif;
+    font-weight:600;
+    font-size: 16px;
+    color: var(--ink);
+    margin: 36px 0 12px;
+  }
+
+  p{
+    font-size: 15.5px;
+    line-height: 1.75;
+    color: var(--ink);
+    margin: 0 0 22px;
+  }
+
+  article a{
+    color: var(--ink);
+    text-decoration:none;
+    border-bottom: 1px solid var(--accent-dim);
+    transition: color .2s ease, border-color .2s ease;
+  }
+  article a:hover, article a:focus{
+    color: var(--hover);
+    border-color: var(--hover);
+  }
+
+  ul, ol{ margin: 0 0 22px; padding-left: 22px; line-height:1.75; font-size:15.5px; }
+  li{ margin-bottom: 8px; }
+
+  blockquote{
+    margin: 32px 0;
+    padding: 4px 0 4px 20px;
+    border-left: 2px solid var(--accent-dim);
+    color: var(--ink-dim);
+    font-size: 15px;
+    line-height:1.7;
+  }
+
+  figure{ margin: 36px 0; }
+  figure img{
+    display:block;
+    width:100%;
+    height:auto;
+    border: 1px solid var(--line);
+    filter: grayscale(.35) contrast(1.03);
+  }
+  figcaption{
+    margin-top: 10px;
+    font-size: 11px;
+    letter-spacing:.06em;
+    color: var(--ink-faint);
+    text-align:center;
+  }
+
+  code{
+    font-family:"IBM Plex Mono", monospace;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 2px 6px;
+    font-size: 14px;
+  }
+  pre{
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 16px 18px;
+    overflow-x:auto;
+    margin: 0 0 22px;
+  }
+  pre code{ background:none; border:none; padding:0; }
+
+  hr{
+    border:none;
+    border-top: 1px solid var(--nav-line);
+    margin: 48px 0;
+  }
+
+  /* ---------- footer nav — back to the hub ---------- */
+  footer.site{
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 6vw 80px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-size: 10.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color: var(--ink-faint);
+  }
+  footer.site a{
+    color: var(--ink-faint);
+    text-decoration:none;
+    transition: color .2s ease;
+  }
+  footer.site a:hover, footer.site a:focus{ color: var(--hover); }
+
+  /* ---------- corner seal — identical on every page ---------- */
+  .corner-seal{
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    z-index: 2;
+    opacity: .62;
+    transition: opacity .3s ease;
+  }
+  .corner-seal:hover, .corner-seal:focus-within{ opacity: 1; }
+  .corner-seal svg{ display:block; width: 100px; height:auto; }
+
+  .seal-ring{ fill:none; stroke: var(--line); stroke-width:1; transition: stroke .3s ease; }
+  .seal-mark{ stroke: var(--ink-faint); stroke-width:1; }
+  .seal-dot{ fill: var(--accent-dim); transition: fill .3s ease, filter .3s ease; }
+
+  .seal-text{
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 9.5px;
+    letter-spacing: .14em;
+    fill: var(--ink-dim);
+  }
+
+  .seal-mail{ text-decoration:none; }
+  .seal-mail tspan{ fill: var(--ink-dim); transition: fill .3s ease, filter .3s ease; }
+  .seal-mail:hover tspan,
+  .seal-mail:focus tspan{
+    fill: var(--hover);
+    filter: drop-shadow(0 0 3px rgba(156,144,217,.85));
+  }
+  .seal-mail:focus{ outline: none; }
+
+  .corner-seal:has(.seal-mail:hover) .seal-ring,
+  .corner-seal:has(.seal-mail:focus) .seal-ring{ stroke: var(--hover-dim); }
+  .corner-seal:has(.seal-mail:hover) .seal-dot,
+  .corner-seal:has(.seal-mail:focus) .seal-dot{
+    fill: var(--hover);
+    filter: drop-shadow(0 0 3px rgba(156,144,217,.85));
+  }
+
+  .seal-motto{
+    font-family: "Unbounded", sans-serif;
+    font-weight: 800;
+    font-size: 16px;
+    letter-spacing: .01em;
+    fill: var(--ink);
+  }
+
+  @media (max-width: 520px){
+    .corner-seal{ right: 14px; bottom: 14px; }
+    .corner-seal svg{ width: 78px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ transition-duration: .001s !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <a href="/"><span class="arrow">&#8592;</span>THE INDIFFERENCE ENGINEER</a>
+</header>
+
+<!-- ====================== EDIT BELOW ====================== -->
+<main>
+  <article>
+    <p class="meta">CATEGORY &middot; DATE</p>
+    <h1>Page Title Goes Here</h1>
+
+    <p>
+      Opening paragraph. This is standard body copy — Plex Mono at 15.5px
+      with generous line-height, sized for actual reading rather than
+      short UI labels. Replace all of this placeholder text.
+    </p>
+
+    <h2>A Section Heading</h2>
+    <p>
+      More body copy. Inline links look
+      <a href="https://example.com">like this</a> — quiet by default,
+      amber on hover, consistent with the rest of the site.
+    </p>
+
+    <blockquote>
+      A pulled quote or aside sits here, set off with a left rule instead
+      of quotation marks.
+    </blockquote>
+
+    <figure>
+      <img src="PATH/TO/IMAGE.jpg" alt="Describe the image" />
+      <figcaption>Caption text, small and centered.</figcaption>
+    </figure>
+
+    <h3>A Smaller Heading</h3>
+    <ul>
+      <li>List item one</li>
+      <li>List item two</li>
+    </ul>
+
+    <p>Inline <code>code</code> and block code:</p>
+    <pre><code>example_command --flag value</code></pre>
+
+    <hr />
+
+    <p>Closing paragraph or sign-off.</p>
+  </article>
+</main>
+<!-- ====================== EDIT ABOVE ====================== -->
+
+<footer class="site">
+  <span>Trevor Dodge</span>
+  <a href="/">Back to hub</a>
+</footer>
+
+<div class="corner-seal">
+  <svg viewBox="0 0 300 300" aria-hidden="false">
+    <defs>
+      <path id="arcTop" d="M 30,150 A 120,120 0 0 1 270,150" />
+      <path id="arcBottom" d="M 30,150 A 120,120 0 0 0 270,150" />
+    </defs>
+
+    <circle class="seal-ring" cx="150" cy="150" r="120" />
+    <circle class="seal-ring" cx="150" cy="150" r="98" />
+
+    <line class="seal-mark" x1="150" y1="116" x2="150" y2="138" />
+    <line class="seal-mark" x1="150" y1="164" x2="150" y2="186" />
+
+    <circle class="seal-dot" cx="30" cy="150" r="2.2" />
+    <circle class="seal-dot" cx="270" cy="150" r="2.2" />
+
+    <text class="seal-text">
+      <textPath href="#arcTop" startOffset="50%" text-anchor="middle">POST TENEBRAS LUX</textPath>
+    </text>
+    <text class="seal-text">
+      <textPath href="#arcBottom" startOffset="50%" text-anchor="middle"><a class="seal-mail" href="mailto:lux_esto@protonmail.com" aria-label="Email"><tspan>LUX ESTO</tspan></a><tspan> UMBRAS FINDENS</tspan></textPath>
+    </text>
+
+    <text class="seal-motto" x="150" y="156" text-anchor="middle">TRY. FAIL. LEARN.</text>
+  </svg>
+</div>
+</body>
+</html>

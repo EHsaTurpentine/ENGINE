@@ -1,723 +1,220 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>THE INDIFFERENCE ENGINEER.</title>
-<link rel="stylesheet" href="style.css">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>THE INDIFFERENCE ENGINEER</title>
+<meta name="description" content="THE INDIFFERENCE ENGINEER — Substack, WordPress, and YouTube." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0b0c;
+    --line: #2a2c2f;
+    --line-soft: #1a1c1e;
+    --ink: #e9e7e1;
+    --ink-dim: #83868a;
+    --ink-faint: #4c4e51;
+    --accent: #e3a548;
+    --accent-dim: #6b5527;
+    --maxw: 640px;
+  }
+
+  *{ box-sizing: border-box; }
+  html, body{ margin:0; padding:0; background: var(--bg); color: var(--ink); }
+
+  body{
+    min-height:100vh;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding: 8vh 6vw;
+    background-image:
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size: 42px 42px;
+    background-position: center;
+  }
+
+  main{ width:100%; max-width: var(--maxw); display:flex; flex-direction:column; align-items:center; }
+
+  h1{
+    font-family: "Unbounded", "IBM Plex Mono", sans-serif;
+    font-weight: 800;
+    font-size: clamp(22px, 4vw, 30px);
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+    margin: 0;
+    text-align:center;
+    color: var(--ink-dim);
+  }
+
+  /* hidden link to the ENGINE archive — same trick as LUX ESTO in the seal */
+  .title-link{
+    color: inherit;
+    text-decoration: none;
+    transition: color .3s ease, text-shadow .3s ease;
+  }
+  .title-link:hover,
+  .title-link:focus{
+    color: var(--accent);
+    text-shadow: 0 0 8px rgba(227,165,72,.7);
+  }
+  .title-link:focus{ outline: none; }
+  .title-link:focus-visible{
+    outline: 1px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  nav.rows{
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    border-top: 1px solid var(--line-soft);
+    margin-top: 56px;
+  }
+
+  .row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding: 30px 6px;
+    border-bottom: 1px solid var(--line-soft);
+    text-decoration:none;
+    color: var(--ink);
+    font-family:"Unbounded", sans-serif;
+    font-weight:600;
+    font-size: clamp(20px, 4.4vw, 30px);
+    transition: padding-left .25s ease, border-color .25s ease;
+  }
+
+  .row .arrow{
+    font-family:"IBM Plex Mono", monospace;
+    color: var(--ink-faint);
+    font-size: 18px;
+    transition: transform .25s ease, color .25s ease;
+  }
+
+  .row:hover{ padding-left: 14px; border-bottom-color: var(--accent-dim); }
+  .row:hover .arrow{ color: var(--accent); transform: translateX(6px); }
+  .row:focus-visible{ outline: 1px solid var(--accent); outline-offset: 4px; }
+
+  footer{
+    margin-top: 36px;
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    color: var(--ink-faint);
+    text-transform:uppercase;
+  }
+
+  /* corner seal — secondary mark, stationary */
+  .corner-seal{
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    z-index: 2;
+    opacity: .62;
+    transition: opacity .3s ease;
+  }
+  .corner-seal:hover, .corner-seal:focus-within{ opacity: 1; }
+
+  .corner-seal svg{ display:block; width: 100px; height:auto; }
+
+  .seal-ring{ fill:none; stroke: var(--line); stroke-width:1; transition: stroke .3s ease; }
+  .seal-mark{ stroke: var(--ink-faint); stroke-width:1; }
+  .seal-dot{ fill: var(--accent-dim); transition: fill .3s ease, filter .3s ease; }
+
+  .seal-text{
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 9.5px;
+    letter-spacing: .14em;
+    fill: var(--ink-dim);
+  }
+
+  .seal-mail{ text-decoration:none; }
+  .seal-mail tspan{ fill: var(--ink-dim); transition: fill .3s ease, filter .3s ease; }
+  .seal-mail:hover tspan,
+  .seal-mail:focus tspan{
+    fill: var(--accent);
+    filter: drop-shadow(0 0 3px rgba(227,165,72,.85));
+  }
+  .seal-mail:focus{ outline: none; }
+
+  /* the "circuit completes" moment — ring + mint marks light up with the hidden link */
+  .corner-seal:has(.seal-mail:hover) .seal-ring,
+  .corner-seal:has(.seal-mail:focus) .seal-ring{
+    stroke: var(--accent-dim);
+  }
+  .corner-seal:has(.seal-mail:hover) .seal-dot,
+  .corner-seal:has(.seal-mail:focus) .seal-dot{
+    fill: var(--accent);
+    filter: drop-shadow(0 0 3px rgba(227,165,72,.85));
+  }
+
+  .seal-motto{
+    font-family: "Unbounded", sans-serif;
+    font-weight: 800;
+    font-size: 16px;
+    letter-spacing: .01em;
+    fill: var(--ink);
+  }
+
+  @media (max-width: 520px){
+    .corner-seal{ right: 14px; bottom: 14px; }
+    .corner-seal svg{ width: 78px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ transition-duration: .001s !important; }
+  }
+</style>
 </head>
 <body>
-<div class="crt">
-<div class="screen">
-<header class="site-header">
-<a class="site-title" href=".">THE INDIFFERENCE ENGINEER.</a>
-<p class="tagline">POST TENEBRAS LUX ESTO UMBRAS FINDENS.</p>
-<nav class="topnav">
-<a href="pages/blog/">[BLOG]</a>
-<a href="https://ehsaturpentine.github.io/ENGINE/">[INDF_ENG]</a>
-<a href="pages/points-of-interest/">[POINTS]</a>
-<a href="pages/ludes/">[LUDES]</a>
-<a href="pages/about/">[ABOUT]</a>
-</nav>
-<hr class="double">
-</header>
-<div class="layout">
-<main class="entries">
-<article class="entry">
-<div class="entry-head"><span class="line-no">10</span> <h2><a href="posts/bunny-colvin/">SIR COLVIN OF THE DAFFODILS.</a></h2></div>
-<p class="entry-date">2026-07-29</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/bunny-colvin/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">20</span> <h2><a href="posts/its-been-real/">IT'S BEEN REAL +</a></h2></div>
-<p class="entry-date">2026-07-29</p>
-<p class="excerpt">it's been fun. + You know how the rest goes. I'm sorry to report, too: turns out being DEAD is super BORING but turns out there's still a sliver of…</p>
-<a class="run-link" href="posts/its-been-real/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">30</span> <h2><a href="posts/i-e-00-an-interview-with-me/">I.E.-00: AN INTERVIEW WITH ME.</a></h2></div>
-<p class="entry-date">2026-07-28</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/i-e-00-an-interview-with-me/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">40</span> <h2><a href="posts/far-from-these-alarms/">FAR FROM THESE ALARMS.</a></h2></div>
-<p class="entry-date">2026-07-22</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/far-from-these-alarms/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">50</span> <h2><a href="posts/the-vampire-claude/">THE VAMPIRE CLAUDE.</a></h2></div>
-<p class="entry-date">2026-07-22</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/the-vampire-claude/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">60</span> <h2><a href="posts/gratitude/">GRATITUDE.</a></h2></div>
-<p class="entry-date">2026-07-17</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/gratitude/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">70</span> <h2><a href="posts/quiet-hall/">QUIET. HALL.</a></h2></div>
-<p class="entry-date">2026-07-01</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/quiet-hall/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">80</span> <h2><a href="posts/smoke-signals/">SMOKE. SIGNALS.</a></h2></div>
-<p class="entry-date">2026-06-22</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/smoke-signals/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">90</span> <h2><a href="posts/sour-preferably/">(SOUR PREFERABLY.)</a></h2></div>
-<p class="entry-date">2026-06-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sour-preferably/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">100</span> <h2><a href="posts/blank/">BLANK.</a></h2></div>
-<p class="entry-date">2026-05-12</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/blank/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">110</span> <h2><a href="posts/slates/">SLATES.</a></h2></div>
-<p class="entry-date">2026-05-12</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/slates/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">120</span> <h2><a href="posts/aligning-ings/">ALIGNING-INGS.</a></h2></div>
-<p class="entry-date">2026-05-08</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/aligning-ings/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">130</span> <h2><a href="posts/ghost-moose/">GHOST MOOSE.</a></h2></div>
-<p class="entry-date">2026-05-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/ghost-moose/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">140</span> <h2><a href="posts/gemma-correll/">GEMMA CORRELL.</a></h2></div>
-<p class="entry-date">2026-05-04</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/gemma-correll/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">150</span> <h2><a href="posts/211-2/">!</a></h2></div>
-<p class="entry-date">2026-04-23</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/211-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">160</span> <h2><a href="posts/polarity/">POLARITY.</a></h2></div>
-<p class="entry-date">2026-04-18</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/polarity/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">170</span> <h2><a href="posts/time/">PANIC. SWITCH.</a></h2></div>
-<p class="entry-date">2026-04-07</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/time/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">180</span> <h2><a href="posts/for-the/">FOR THE.</a></h2></div>
-<p class="entry-date">2026-04-04</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/for-the/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">190</span> <h2><a href="posts/diminishing-returnings/">DIMINISHING RETURNINGS</a></h2></div>
-<p class="entry-date">2026-03-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/diminishing-returnings/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">200</span> <h2><a href="posts/mirrorings-moorings/">MIRRORINGS + MOORINGS</a></h2></div>
-<p class="entry-date">2026-03-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/mirrorings-moorings/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">210</span> <h2><a href="posts/ponderings/">PONDERINGS</a></h2></div>
-<p class="entry-date">2026-03-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/ponderings/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">220</span> <h2><a href="posts/railings/">RAILINGS</a></h2></div>
-<p class="entry-date">2026-03-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/railings/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">230</span> <h2><a href="posts/wirings/">WIRINGS</a></h2></div>
-<p class="entry-date">2026-03-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/wirings/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">240</span> <h2><a href="posts/reduce-reuse/">REDUCE REUSE</a></h2></div>
-<p class="entry-date">2026-03-16</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/reduce-reuse/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">250</span> <h2><a href="posts/lux-esto-umbras-findens/">LUX ESTO, UMBRAS FINDENS.</a></h2></div>
-<p class="entry-date">2026-03-14</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/lux-esto-umbras-findens/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">260</span> <h2><a href="posts/185-2/">.</a></h2></div>
-<p class="entry-date">2026-03-04</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/185-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">270</span> <h2><a href="posts/40-2/">40.</a></h2></div>
-<p class="entry-date">2026-03-03</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/40-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">280</span> <h2><a href="posts/lux-in-tenebris/">LUX IN TENEBRIS.</a></h2></div>
-<p class="entry-date">2026-02-24</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/lux-in-tenebris/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">290</span> <h2><a href="posts/borrowers-no/">BORROWER’S NO.</a></h2></div>
-<p class="entry-date">2026-02-10</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/borrowers-no/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">300</span> <h2><a href="posts/skies-like-us/">SKIES LIKE US.</a></h2></div>
-<p class="entry-date">2026-02-09</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/skies-like-us/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">310</span> <h2><a href="posts/alturas-co-mail-delivery/">ALTURAS CO. MAIL DELIVERY.</a></h2></div>
-<p class="entry-date">2026-02-05</p>
-<p class="excerpt">https://videopress.com/v/22DpcF8n?resizeToParent=true&amp;cover=true&amp;preloadContent=metadata&amp;useAverageColor=true</p>
-<a class="run-link" href="posts/alturas-co-mail-delivery/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">320</span> <h2><a href="posts/ne-nuit-pas-aux-autres/">NE NUIT PAS AUX AUTRES.</a></h2></div>
-<p class="entry-date">2026-01-20</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/ne-nuit-pas-aux-autres/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">330</span> <h2><a href="posts/167-2/">.</a></h2></div>
-<p class="entry-date">2025-12-26</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/167-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">340</span> <h2><a href="posts/165-2/">.</a></h2></div>
-<p class="entry-date">2025-12-11</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/165-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">350</span> <h2><a href="posts/163-2/">.</a></h2></div>
-<p class="entry-date">2025-11-25</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/163-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">360</span> <h2><a href="posts/0th/">0TH.</a></h2></div>
-<p class="entry-date">2025-11-16</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/0th/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">370</span> <h2><a href="posts/no-you-first/">NO. YOU FIRST.</a></h2></div>
-<p class="entry-date">2025-11-15</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/no-you-first/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">380</span> <h2><a href="posts/noparking/">[NO]PARKING.</a></h2></div>
-<p class="entry-date">2025-11-13</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/noparking/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">390</span> <h2><a href="posts/vapor-wave/">VAPOR.WAVE.</a></h2></div>
-<p class="entry-date">2025-11-12</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/vapor-wave/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">400</span> <h2><a href="posts/fell/">FELL.</a></h2></div>
-<p class="entry-date">2025-11-09</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/fell/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">410</span> <h2><a href="posts/youre-not-pretty-when-youre-talking-like-that/">YOURE NOT PRETTY WHEN YOURE TALKING LIKE THAT.</a></h2></div>
-<p class="entry-date">2025-10-26</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/youre-not-pretty-when-youre-talking-like-that/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">420</span> <h2><a href="posts/rip-vrg/">RIP VRG.</a></h2></div>
-<p class="entry-date">2025-10-24</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/rip-vrg/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">430</span> <h2><a href="posts/rest-in-power/">REST IN POWER.</a></h2></div>
-<p class="entry-date">2025-10-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/rest-in-power/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">440</span> <h2><a href="posts/141-2/">.</a></h2></div>
-<p class="entry-date">2025-10-20</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/141-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">450</span> <h2><a href="posts/twenty-on-black-eleven/">TWENTY ON BLACK ELEVEN.</a></h2></div>
-<p class="entry-date">2025-10-19</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/twenty-on-black-eleven/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">460</span> <h2><a href="posts/clearance/">CLEARANCE.</a></h2></div>
-<p class="entry-date">2025-10-17</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/clearance/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">470</span> <h2><a href="posts/depeche-mode/">DEPECHE MODE.</a></h2></div>
-<p class="entry-date">2025-09-07</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/depeche-mode/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">480</span> <h2><a href="posts/131-2/">.</a></h2></div>
-<p class="entry-date">2025-08-25</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/131-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">490</span> <h2><a href="posts/128-2/">…</a></h2></div>
-<p class="entry-date">2025-08-15</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/128-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">500</span> <h2><a href="posts/stay-out-of-big-gym/">STAY OUT OF BIG GYM.</a></h2></div>
-<p class="entry-date">2025-08-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/stay-out-of-big-gym/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">510</span> <h2><a href="posts/122-2/">…</a></h2></div>
-<p class="entry-date">2025-08-03</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/122-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">520</span> <h2><a href="posts/forever-overhead/">FOREVER OVERHEAD.</a></h2></div>
-<p class="entry-date">2025-07-29</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/forever-overhead/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">530</span> <h2><a href="posts/115-2/">>.</a></h2></div>
-<p class="entry-date">2025-07-28</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/115-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">540</span> <h2><a href="posts/112-2/">.</a></h2></div>
-<p class="entry-date">2025-07-27</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/112-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">550</span> <h2><a href="posts/photo/">PHOTO.</a></h2></div>
-<p class="entry-date">2025-07-24</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/photo/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">560</span> <h2><a href="posts/the-doors-you-open/">THE DOORS YOU OPEN.</a></h2></div>
-<p class="entry-date">2025-07-15</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/the-doors-you-open/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">570</span> <h2><a href="posts/103-2/">.</a></h2></div>
-<p class="entry-date">2025-07-08</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/103-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">580</span> <h2><a href="posts/catblocker/">CATBLOCKER.</a></h2></div>
-<p class="entry-date">2025-07-07</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/catblocker/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">590</span> <h2><a href="posts/dredge/">DREDGE.</a></h2></div>
-<p class="entry-date">2025-07-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/dredge/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">600</span> <h2><a href="posts/fade/">FADE.</a></h2></div>
-<p class="entry-date">2025-06-26</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/fade/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">610</span> <h2><a href="posts/sprung/">SPRUNG.</a></h2></div>
-<p class="entry-date">2025-06-17</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprung/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">620</span> <h2><a href="posts/89-2/">.</a></h2></div>
-<p class="entry-date">2025-06-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/89-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">630</span> <h2><a href="posts/87-2/">.</a></h2></div>
-<p class="entry-date">2025-05-30</p>
-<p class="excerpt">https://videopress.com/v/6ipwYePf?resizeToParent=true&amp;cover=true&amp;preloadContent=metadata&amp;useAverageColor=true</p>
-<a class="run-link" href="posts/87-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">640</span> <h2><a href="posts/the-gift-that-says-i-get-you/">THE GIFT THAT SAYS I GET YOU.</a></h2></div>
-<p class="entry-date">2025-05-26</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/the-gift-that-says-i-get-you/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">650</span> <h2><a href="posts/83-2/">.</a></h2></div>
-<p class="entry-date">2025-05-24</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/83-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">660</span> <h2><a href="posts/80-2/">.</a></h2></div>
-<p class="entry-date">2025-05-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/80-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">670</span> <h2><a href="posts/78-2/">.</a></h2></div>
-<p class="entry-date">2025-05-20</p>
-<p class="excerpt">https://videopress.com/v/TzoWOu35?resizeToParent=true&amp;cover=true&amp;preloadContent=metadata&amp;useAverageColor=true</p>
-<a class="run-link" href="posts/78-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">680</span> <h2><a href="posts/______________-my-heart/">______________ MY HEART.</a></h2></div>
-<p class="entry-date">2025-05-19</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/______________-my-heart/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">690</span> <h2><a href="posts/74-2/">.</a></h2></div>
-<p class="entry-date">2025-05-18</p>
-<p class="excerpt">https://videopress.com/v/4DeUkzzE?resizeToParent=true&amp;cover=true&amp;preloadContent=metadata&amp;useAverageColor=true</p>
-<a class="run-link" href="posts/74-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">700</span> <h2><a href="posts/p-o-i-s/">P.O.I.s.</a></h2></div>
-<p class="entry-date">2025-04-21</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/p-o-i-s/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">710</span> <h2><a href="posts/sprigs-6/">SPRIGS.</a></h2></div>
-<p class="entry-date">2025-04-20</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprigs-6/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">720</span> <h2><a href="posts/sprigs-5/">SPRIGS.</a></h2></div>
-<p class="entry-date">2025-02-14</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprigs-5/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">730</span> <h2><a href="posts/sprigs-2/">SPRIGS.</a></h2></div>
-<p class="entry-date">2025-02-13</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprigs-2/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">740</span> <h2><a href="posts/sprigs-3/">SPRIGS.</a></h2></div>
-<p class="entry-date">2025-02-13</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprigs-3/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">750</span> <h2><a href="posts/sprigs-4/">SPRIGS.</a></h2></div>
-<p class="entry-date">2025-02-13</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprigs-4/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">760</span> <h2><a href="posts/sprigs/">SPRIGS.</a></h2></div>
-<p class="entry-date">2025-02-13</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/sprigs/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">770</span> <h2><a href="posts/no-country-just-old-men/">NO COUNTRY. JUST OLD MEN.</a></h2></div>
-<p class="entry-date">2025-02-03</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/no-country-just-old-men/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">780</span> <h2><a href="posts/2-to-too-confusion/">2/TO/TOO CONFUSION.</a></h2></div>
-<p class="entry-date">2025-01-27</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/2-to-too-confusion/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">790</span> <h2><a href="posts/roll-credits/">ROLL CREDITS.</a></h2></div>
-<p class="entry-date">2025-01-19</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/roll-credits/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">800</span> <h2><a href="posts/status-quo/">STATUS QUO.</a></h2></div>
-<p class="entry-date">2024-12-20</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/status-quo/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">810</span> <h2><a href="posts/post-tenebras-lux-added/">POST [TENEBRAS LUX] ADDED.</a></h2></div>
-<p class="entry-date">2024-12-18</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/post-tenebras-lux-added/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">820</span> <h2><a href="posts/now-hiring/">NOW HIRING.</a></h2></div>
-<p class="entry-date">2024-12-17</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/now-hiring/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">830</span> <h2><a href="posts/fix-adjust-2024/">FIX / ADJUST.</a></h2></div>
-<p class="entry-date">2024-12-16</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/fix-adjust-2024/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">840</span> <h2><a href="posts/mailing-letters-to-a-ghost-town/">MAILING LETTERS TO A GHOST TOWN.</a></h2></div>
-<p class="entry-date">2024-12-16</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/mailing-letters-to-a-ghost-town/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">850</span> <h2><a href="posts/right-turn-only/">RIGHT TURN ONLY.</a></h2></div>
-<p class="entry-date">2024-12-08</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/right-turn-only/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">860</span> <h2><a href="posts/on-your-knees-boy-its-thanksgiving-day-dinner-leftovers/">ON YOUR KNEES BOY IT’S THANKSGIVING DAY DINNER LEFTOVERS.</a></h2></div>
-<p class="entry-date">2024-12-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/on-your-knees-boy-its-thanksgiving-day-dinner-leftovers/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">870</span> <h2><a href="posts/pattern-recognition/">PATTERN RECOGNITION.</a></h2></div>
-<p class="entry-date">2024-12-06</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/pattern-recognition/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">880</span> <h2><a href="posts/target/">TARGET.</a></h2></div>
-<p class="entry-date">2024-12-05</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/target/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">890</span> <h2><a href="posts/the-spot/">THE SPOT.</a></h2></div>
-<p class="entry-date">2024-12-05</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/the-spot/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">900</span> <h2><a href="posts/metadata/">CHECK METADATA.</a></h2></div>
-<p class="entry-date">2024-12-04</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/metadata/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">910</span> <h2><a href="posts/stock-photo/">STOCK PHOTO.</a></h2></div>
-<p class="entry-date">2024-12-04</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/stock-photo/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">920</span> <h2><a href="posts/open-letter/">OPEN LETTER.</a></h2></div>
-<p class="entry-date">2024-12-03</p>
-<p class="excerpt"></p>
-<a class="run-link" href="posts/open-letter/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
-<article class="entry">
-<div class="entry-head"><span class="line-no">930</span> <h2><a href="posts/post-tenebras-lux/">POST TENEBRAS LUX.</a></h2></div>
-<p class="entry-date">2024-12-03</p>
-<p class="excerpt">POST TENEBRAS LUX.</p>
-<a class="run-link" href="posts/post-tenebras-lux/">&gt; RUN THIS ENTRY</a>
-</article>
-<hr class="divider">
+<main>
+  <h1>THE INDIFFERENCE&nbsp;<a class="title-link" href="https://ehsaturpentine.github.io/ENGINE/" target="_blank" rel="noopener" aria-label="ENGINE — archive">ENGINE</a>ER</h1>
+
+  <nav class="rows" aria-label="Platforms">
+    <a class="row" href="https://substack.com/@ehsaturpentine" target="_blank" rel="noopener">
+      <span>Substack</span><span class="arrow">&#8594;</span>
+    </a>
+    <a class="row" href="https://posttenebraslux3.wordpress.com" target="_blank" rel="noopener">
+      <span>WordPress</span><span class="arrow">&#8594;</span>
+    </a>
+    <a class="row" href="https://www.youtube.com/@POSTTENEBRASLUX-m9p" target="_blank" rel="noopener">
+      <span>YouTube</span><span class="arrow">&#8594;</span>
+    </a>
+  </nav>
+
+  <footer>Trevor Dodge</footer>
 </main>
-<aside class="sidebar">
-<h3>Search</h3>
-<form class="search-form" onsubmit="return false;">
-<input type="text" id="search-box" placeholder="">
-<button type="button" onclick="runSearch()">SEARCH</button>
-</form>
-<div id="search-results"></div>
-<h3>RECENT POSTS</h3>
-<ul class="recent-list">
-<li><a href="posts/bunny-colvin/">SIR COLVIN OF THE DAFFODILS.</a></li>
-<li><a href="posts/its-been-real/">IT'S BEEN REAL +</a></li>
-<li><a href="posts/i-e-00-an-interview-with-me/">I.E.-00: AN INTERVIEW WITH ME.</a></li>
-<li><a href="posts/far-from-these-alarms/">FAR FROM THESE ALARMS.</a></li>
-<li><a href="posts/the-vampire-claude/">THE VAMPIRE CLAUDE.</a></li>
-<li><a href="posts/gratitude/">GRATITUDE.</a></li>
-<li><a href="posts/quiet-hall/">QUIET. HALL.</a></li>
-<li><a href="posts/smoke-signals/">SMOKE. SIGNALS.</a></li>
-</ul>
-</aside>
+
+<div class="corner-seal">
+  <svg viewBox="0 0 300 300" aria-hidden="false">
+    <defs>
+      <path id="arcTop" d="M 30,150 A 120,120 0 0 1 270,150" />
+      <path id="arcBottom" d="M 30,150 A 120,120 0 0 0 270,150" />
+    </defs>
+
+    <circle class="seal-ring" cx="150" cy="150" r="120" />
+    <circle class="seal-ring" cx="150" cy="150" r="98" />
+
+    <line class="seal-mark" x1="150" y1="116" x2="150" y2="138" />
+    <line class="seal-mark" x1="150" y1="164" x2="150" y2="186" />
+
+    <circle class="seal-dot" cx="30" cy="150" r="2.2" />
+    <circle class="seal-dot" cx="270" cy="150" r="2.2" />
+
+    <text class="seal-text">
+      <textPath href="#arcTop" startOffset="50%" text-anchor="middle">POST TENEBRAS LUX</textPath>
+    </text>
+    <text class="seal-text">
+      <textPath href="#arcBottom" startOffset="50%" text-anchor="middle"><a class="seal-mail" href="mailto:lux_esto@protonmail.com" aria-label="Email"><tspan>LUX ESTO</tspan></a><tspan> UMBRAS FINDENS</tspan></textPath>
+    </text>
+
+    <text class="seal-motto" x="150" y="156" text-anchor="middle">TRY. FAIL. LEARN.</text>
+  </svg>
 </div>
-</div>
-</div>
-<script>
-const SEARCH_INDEX = [{"title": "SIR COLVIN OF THE DAFFODILS.", "href": "posts/bunny-colvin/"}, {"title": "IT'S BEEN REAL +", "href": "posts/its-been-real/"}, {"title": "I.E.-00: AN INTERVIEW WITH ME.", "href": "posts/i-e-00-an-interview-with-me/"}, {"title": "FAR FROM THESE ALARMS.", "href": "posts/far-from-these-alarms/"}, {"title": "THE VAMPIRE CLAUDE.", "href": "posts/the-vampire-claude/"}, {"title": "GRATITUDE.", "href": "posts/gratitude/"}, {"title": "QUIET. HALL.", "href": "posts/quiet-hall/"}, {"title": "SMOKE. SIGNALS.", "href": "posts/smoke-signals/"}, {"title": "(SOUR PREFERABLY.)", "href": "posts/sour-preferably/"}, {"title": "BLANK.", "href": "posts/blank/"}, {"title": "SLATES.", "href": "posts/slates/"}, {"title": "ALIGNING-INGS.", "href": "posts/aligning-ings/"}, {"title": "GHOST MOOSE.", "href": "posts/ghost-moose/"}, {"title": "GEMMA CORRELL.", "href": "posts/gemma-correll/"}, {"title": "!", "href": "posts/211-2/"}, {"title": "POLARITY.", "href": "posts/polarity/"}, {"title": "PANIC. SWITCH.", "href": "posts/time/"}, {"title": "FOR THE.", "href": "posts/for-the/"}, {"title": "DIMINISHING RETURNINGS", "href": "posts/diminishing-returnings/"}, {"title": "MIRRORINGS + MOORINGS", "href": "posts/mirrorings-moorings/"}, {"title": "PONDERINGS", "href": "posts/ponderings/"}, {"title": "RAILINGS", "href": "posts/railings/"}, {"title": "WIRINGS", "href": "posts/wirings/"}, {"title": "REDUCE REUSE", "href": "posts/reduce-reuse/"}, {"title": "LUX ESTO, UMBRAS FINDENS.", "href": "posts/lux-esto-umbras-findens/"}, {"title": ".", "href": "posts/185-2/"}, {"title": "40.", "href": "posts/40-2/"}, {"title": "LUX IN TENEBRIS.", "href": "posts/lux-in-tenebris/"}, {"title": "BORROWER\u2019S NO.", "href": "posts/borrowers-no/"}, {"title": "SKIES LIKE US.", "href": "posts/skies-like-us/"}, {"title": "ALTURAS CO. MAIL DELIVERY.", "href": "posts/alturas-co-mail-delivery/"}, {"title": "NE NUIT PAS AUX AUTRES.", "href": "posts/ne-nuit-pas-aux-autres/"}, {"title": ".", "href": "posts/167-2/"}, {"title": ".", "href": "posts/165-2/"}, {"title": ".", "href": "posts/163-2/"}, {"title": "0TH.", "href": "posts/0th/"}, {"title": "NO. YOU FIRST.", "href": "posts/no-you-first/"}, {"title": "[NO]PARKING.", "href": "posts/noparking/"}, {"title": "VAPOR.WAVE.", "href": "posts/vapor-wave/"}, {"title": "FELL.", "href": "posts/fell/"}, {"title": "YOURE NOT PRETTY WHEN YOURE TALKING LIKE THAT.", "href": "posts/youre-not-pretty-when-youre-talking-like-that/"}, {"title": "RIP VRG.", "href": "posts/rip-vrg/"}, {"title": "REST IN POWER.", "href": "posts/rest-in-power/"}, {"title": ".", "href": "posts/141-2/"}, {"title": "TWENTY ON BLACK ELEVEN.", "href": "posts/twenty-on-black-eleven/"}, {"title": "CLEARANCE.", "href": "posts/clearance/"}, {"title": "DEPECHE MODE.", "href": "posts/depeche-mode/"}, {"title": ".", "href": "posts/131-2/"}, {"title": "\u2026", "href": "posts/128-2/"}, {"title": "STAY OUT OF BIG GYM.", "href": "posts/stay-out-of-big-gym/"}, {"title": "\u2026", "href": "posts/122-2/"}, {"title": "FOREVER OVERHEAD.", "href": "posts/forever-overhead/"}, {"title": ">.", "href": "posts/115-2/"}, {"title": ".", "href": "posts/112-2/"}, {"title": "PHOTO.", "href": "posts/photo/"}, {"title": "THE DOORS YOU OPEN.", "href": "posts/the-doors-you-open/"}, {"title": ".", "href": "posts/103-2/"}, {"title": "CATBLOCKER.", "href": "posts/catblocker/"}, {"title": "DREDGE.", "href": "posts/dredge/"}, {"title": "FADE.", "href": "posts/fade/"}, {"title": "SPRUNG.", "href": "posts/sprung/"}, {"title": ".", "href": "posts/89-2/"}, {"title": ".", "href": "posts/87-2/"}, {"title": "THE GIFT THAT SAYS I GET YOU.", "href": "posts/the-gift-that-says-i-get-you/"}, {"title": ".", "href": "posts/83-2/"}, {"title": ".", "href": "posts/80-2/"}, {"title": ".", "href": "posts/78-2/"}, {"title": "______________ MY HEART.", "href": "posts/______________-my-heart/"}, {"title": ".", "href": "posts/74-2/"}, {"title": "P.O.I.s.", "href": "posts/p-o-i-s/"}, {"title": "SPRIGS.", "href": "posts/sprigs-6/"}, {"title": "SPRIGS.", "href": "posts/sprigs-5/"}, {"title": "SPRIGS.", "href": "posts/sprigs-2/"}, {"title": "SPRIGS.", "href": "posts/sprigs-3/"}, {"title": "SPRIGS.", "href": "posts/sprigs-4/"}, {"title": "SPRIGS.", "href": "posts/sprigs/"}, {"title": "NO COUNTRY. JUST OLD MEN.", "href": "posts/no-country-just-old-men/"}, {"title": "2/TO/TOO CONFUSION.", "href": "posts/2-to-too-confusion/"}, {"title": "ROLL CREDITS.", "href": "posts/roll-credits/"}, {"title": "STATUS QUO.", "href": "posts/status-quo/"}, {"title": "POST [TENEBRAS LUX] ADDED.", "href": "posts/post-tenebras-lux-added/"}, {"title": "NOW HIRING.", "href": "posts/now-hiring/"}, {"title": "FIX / ADJUST.", "href": "posts/fix-adjust-2024/"}, {"title": "MAILING LETTERS TO A GHOST TOWN.", "href": "posts/mailing-letters-to-a-ghost-town/"}, {"title": "RIGHT TURN ONLY.", "href": "posts/right-turn-only/"}, {"title": "ON YOUR KNEES BOY IT\u2019S THANKSGIVING DAY DINNER LEFTOVERS.", "href": "posts/on-your-knees-boy-its-thanksgiving-day-dinner-leftovers/"}, {"title": "PATTERN RECOGNITION.", "href": "posts/pattern-recognition/"}, {"title": "TARGET.", "href": "posts/target/"}, {"title": "THE SPOT.", "href": "posts/the-spot/"}, {"title": "CHECK METADATA.", "href": "posts/metadata/"}, {"title": "STOCK PHOTO.", "href": "posts/stock-photo/"}, {"title": "OPEN LETTER.", "href": "posts/open-letter/"}, {"title": "POST TENEBRAS LUX.", "href": "posts/post-tenebras-lux/"}];
-function runSearch() {
-  const q = document.getElementById('search-box').value.trim().toLowerCase();
-  const results = document.getElementById('search-results');
-  results.innerHTML = '';
-  if (!q) return;
-  const matches = SEARCH_INDEX.filter(e => e.title.toLowerCase().includes(q));
-  if (matches.length === 0) {
-    results.innerHTML = '<p class="no-results">NO MATCH FOUND.</p>';
-    return;
-  }
-  const ul = document.createElement('ul');
-  ul.className = 'recent-list';
-  matches.forEach(e => {
-    const li = document.createElement('li');
-    li.innerHTML = '<a href="' + e.href + '">' + e.title + '</a>';
-    ul.appendChild(li);
-  });
-  results.appendChild(ul);
-}
-</script>
 </body>
 </html>

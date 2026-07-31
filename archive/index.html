@@ -279,8 +279,10 @@
       <a href="https://ehsaturpentine.github.io/ENGINE/apps/vhs_gen/vhs_gen.html">USE.</a> 
     </p>
     <figure>
-<div class="engine-player" data-src="https://ehsaturpentine.github.io/ENGINE/apps/vhs_gen/acker_vhs_teaser.mp4" data-label="ACKER_VHS_TEASER.MP4"></div>
-      <figcaption>HTML APPLICATION IN CONCERT WITH CLAUDE, THE VAMPIRE</figcaption>
+<div class="engineer-player"
+     data-src="https://ehsaturpentine.github.io/ENGINE/apps/vhs_gen/acker_vhs_teaser.mp4"
+     data-label="ACKER_VHS_TEASER.MP4"
+     data-caption="HTML APPLICATION IN CONCERT WITH CLAUDE, THE VAMPIRE"></div>
     </figure>
 
 
@@ -325,42 +327,64 @@
 
 
 <!-- ============================================
-     ENGINE PLAYER — paste this div anywhere you
-     want a file to play. Swap data-src (and
-     optionally data-label) for each file.
+     ENGINEER PLAYER — paste this block once per
+     page. Then copy just the one-line div for
+     each additional file. The data-caption
+     attribute is optional — adds a small caption
+     line below, matching ENGINEER's caption style.
      ============================================ -->
 
 
 <style>
-.engine-player{
-  font-family:'VT323', ui-monospace, monospace;
-  background:#40318D;
-  border:1px solid #6C5EB5;
+.engineer-player{
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  background:#0A0A0C;
+  border:1px solid rgba(108,94,181,.3);
   border-radius:2px;
-  padding:.75rem 1rem;
-  max-width:520px;
-  color:#E9E5FA;
+  padding:1rem 1.1rem;
+  max-width:640px;
+  color:#EDEAF5;
+  transition:border-color .2s ease;
 }
-.engine-player .ep-label{
-  font-size:1.1rem;
-  letter-spacing:.04em;
-  color:#9C90D9;
-  margin-bottom:.5rem;
-  word-break:break-word;
+.engineer-player:hover,
+.engineer-player:focus-within{
+  border-color:#9C90D9;
 }
-.engine-player audio,
-.engine-player video{
+.engineer-player .eg-label{
+  font-size:.95rem;
+  letter-spacing:.03em;
+  text-transform:uppercase;
+  color:#EDEAF5;
+  padding-bottom:.5rem;
+  margin-bottom:.75rem;
+  border-bottom:1px solid #C9A961;
+  display:inline-block;
+}
+.engineer-player audio,
+.engineer-player video{
   width:100%;
   display:block;
   accent-color:#9C90D9;
 }
-.engine-player video{ max-height:70vh; background:#000; }
-.engine-player img{ max-width:100%; display:block; }
-.engine-player .ep-fallback{
-  font-family:ui-monospace, monospace;
+.engineer-player video{ max-height:70vh; background:#000; }
+.engineer-player img{ max-width:100%; display:block; }
+.engineer-player .eg-caption{
+  margin-top:.75rem;
+  font-size:.7rem;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:#6b6b76;
+}
+.engineer-player .eg-fallback{
   font-size:.85rem;
 }
-.engine-player .ep-fallback a{ color:#9C90D9; }
+.engineer-player .eg-fallback a{
+  color:#C9A961;
+  text-decoration:underline;
+}
+.engineer-player .eg-fallback a:hover{
+  color:#9C90D9;
+}
 </style>
 
 <script>
@@ -374,15 +398,16 @@
     return m ? m[1].toLowerCase() : "";
   }
 
-  document.querySelectorAll(".engine-player:not([data-ready])").forEach(function(box){
+  document.querySelectorAll(".engineer-player:not([data-ready])").forEach(function(box){
     box.setAttribute("data-ready", "1");
     var src = box.getAttribute("data-src");
     var label = box.getAttribute("data-label") || (src ? src.split("/").pop() : "");
+    var caption = box.getAttribute("data-caption");
     var e = ext(src);
 
     if (label){
       var l = document.createElement("div");
-      l.className = "ep-label";
+      l.className = "eg-label";
       l.textContent = label;
       box.appendChild(l);
     }
@@ -399,13 +424,26 @@
       el.alt = label;
     } else {
       var fb = document.createElement("div");
-      fb.className = "ep-fallback";
+      fb.className = "eg-fallback";
       fb.innerHTML = 'NO PREVIEW FOR THIS FILE TYPE. <a href="' + src + '" download>DOWNLOAD</a>';
       box.appendChild(fb);
+      if (caption){
+        var c0 = document.createElement("div");
+        c0.className = "eg-caption";
+        c0.textContent = caption;
+        box.appendChild(c0);
+      }
       return;
     }
     el.src = src;
     box.appendChild(el);
+
+    if (caption){
+      var c = document.createElement("div");
+      c.className = "eg-caption";
+      c.textContent = caption;
+      box.appendChild(c);
+    }
   });
 })();
 </script>

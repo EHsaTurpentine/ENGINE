@@ -323,6 +323,113 @@
     </figure>
 
 
+## Full block (paste once per page)
+
+```html
+<!-- ============================================
+     ENGINE PLAYER — paste this div anywhere you
+     want a file to play. Swap data-src (and
+     optionally data-label) for each file.
+     ============================================ -->
+<div class="engine-player" data-src="media/example.mp3" data-label="EXAMPLE.MP3"></div>
+
+<style>
+.engine-player{
+  font-family:'VT323', ui-monospace, monospace;
+  background:#40318D;
+  border:1px solid #6C5EB5;
+  border-radius:2px;
+  padding:.75rem 1rem;
+  max-width:520px;
+  color:#E9E5FA;
+}
+.engine-player .ep-label{
+  font-size:1.1rem;
+  letter-spacing:.04em;
+  color:#9C90D9;
+  margin-bottom:.5rem;
+  word-break:break-word;
+}
+.engine-player audio,
+.engine-player video{
+  width:100%;
+  display:block;
+  accent-color:#9C90D9;
+}
+.engine-player video{ max-height:70vh; background:#000; }
+.engine-player img{ max-width:100%; display:block; }
+.engine-player .ep-fallback{
+  font-family:ui-monospace, monospace;
+  font-size:.85rem;
+}
+.engine-player .ep-fallback a{ color:#9C90D9; }
+</style>
+
+<script>
+(function(){
+  var AUDIO_EXT = ["mp3","wav","ogg","oga","m4a","flac","aac","weba"];
+  var VIDEO_EXT = ["mp4","webm","mov","m4v","ogv"];
+  var IMAGE_EXT = ["png","jpg","jpeg","gif","webp","svg","bmp"];
+
+  function ext(src){
+    var m = /\.([a-z0-9]+)(\?.*)?$/i.exec(src || "");
+    return m ? m[1].toLowerCase() : "";
+  }
+
+  document.querySelectorAll(".engine-player:not([data-ready])").forEach(function(box){
+    box.setAttribute("data-ready", "1");
+    var src = box.getAttribute("data-src");
+    var label = box.getAttribute("data-label") || (src ? src.split("/").pop() : "");
+    var e = ext(src);
+
+    if (label){
+      var l = document.createElement("div");
+      l.className = "ep-label";
+      l.textContent = label;
+      box.appendChild(l);
+    }
+
+    var el;
+    if (AUDIO_EXT.indexOf(e) !== -1){
+      el = document.createElement("audio");
+      el.controls = true;
+    } else if (VIDEO_EXT.indexOf(e) !== -1){
+      el = document.createElement("video");
+      el.controls = true;
+    } else if (IMAGE_EXT.indexOf(e) !== -1){
+      el = document.createElement("img");
+      el.alt = label;
+    } else {
+      var fb = document.createElement("div");
+      fb.className = "ep-fallback";
+      fb.innerHTML = 'NO PREVIEW FOR THIS FILE TYPE. <a href="' + src + '" download>DOWNLOAD</a>';
+      box.appendChild(fb);
+      return;
+    }
+    el.src = src;
+    box.appendChild(el);
+  });
+})();
+</script>
+```
+
+## Adding another file (once the block above is already on the page)
+
+```html
+<div class="engine-player" data-src="media/another-file.mp4" data-label="ANOTHER-FILE.MP4"></div>
+```
+
+## Notes
+
+- Plays: mp3, wav, ogg, m4a, flac, aac / mp4, webm, mov, m4v natively.
+- Previews: png, jpg, gif, webp, svg.
+- Anything else (PDF, DOCX, HEIC, etc.) shows a download link instead
+  of failing silently.
+- Colors match the ENGINE hub palette (`#40318D` / `#6C5EB5` /
+  `#9C90D9`) — change them in the `<style>` block if the hub palette
+  ever changes.
+
+
 
 
   </article>

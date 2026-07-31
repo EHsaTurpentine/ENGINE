@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📼 VHS Blue Screen Generator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --vhs-blue: #0000B8;
+    --vhs-dark: #00008a;
+    --panel-bg: #141414;
+    --panel-border: #2a2a2a;
+    --label-color: #555;
+    --input-bg: #0e0e0e;
+    --input-border: #333;
+    --white: #ffffff;
+    --mono: 'Share Tech Mono', 'Courier New', monospace;
+  }
+
+  body {
+    background: #0c0c0c;
+    color: #ccc;
+    font-family: var(--mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+    gap: 20px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #fff;
+    font-size: 0.75rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    opacity: 0.6;
+  }
+
+  /* ── LAYOUT ─────────────────────────────── */
+  .workspace {
+    display: flex;
+    gap: 20px;
+    width: 100%;
+    max-width: 980px;
+    align-items: flex-start;
+  }
+
+  /* ── TV SCREEN ───────────────────────────── */
+  .tv-col {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tv-bezel {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #0a0a0a;
+    border-radius: 6px;
+    box-shadow:
+      inset 0 0 0 3px #1c1c1c,
+      0 0 0 2px #111,
+      0 0 40px rgba(0,0,180,0.15),
+      0 8px 32px rgba(0,0,0,0.7);
+    overflow: hidden;
+    position: relative;
+    cursor: default;
+  }
+
+  /* Noise layer */
+  canvas#noise {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  /* Blue screen */
+  #blueScreen {
+    position: absolute;
+    inset: 0;
+    background: var(--vhs-blue);
+    opacity: 0;
+    z-index: 2;
+  }
+
+  /* OSD */
+  .osd {
+    position: absolute;
+    inset: 0;
+    padding: 6% 7%;
+    color: #fff;
+    font-family: var(--mono);
+    font-size: clamp(9px, 2.1vw, 17px);
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    z-index: 4;
+    opacity: 0;
+    display: flex;
+    flex-direction: column;
+    pointer-events: none;
+    text-shadow:
+      1px  1px 0 #000,
+      -1px -1px 0 #000,
+       1px -1px 0 #000,
+      -1px  1px 0 #000,
+       0    2px 4px rgba(0,0,0,0.8);
+  }
+
+  .osd-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    white-space: nowrap;
+  }
+
+  .osd-play {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+  }
+
+  .play-tri {
+    width: 0; height: 0;
+    border-style: solid;
+    border-width: 0.4em 0 0.4em 0.65em;
+    border-color: transparent transparent transparent #fff;
+    filter: drop-shadow(0 0 2px rgba(0,0,0,0.8));
+  }
+
+  .osd-divider {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.3);
+    margin: 0.5em 0;
+  }
+
+  .osd-center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0.3em;
+    padding: 0.5em 0;
+  }
+
+  .osd-source-line {
+    font-size: 0.75em;
+    letter-spacing: 0.35em;
+    opacity: 0.6;
+  }
+
+  .osd-title-line {
+    font-size: 1.45em;
+    letter-spacing: 0.12em;
+  }
+
+  .osd-sub-line {
+    font-size: 0.9em;
+    opacity: 0.8;
+    letter-spacing: 0.08em;
+  }
+
+  .osd-field-row {
+    display: flex;
+    gap: 1.5em;
+    font-size: 0.82em;
+    opacity: 0.75;
+    margin-top: 0.4em;
+  }
+
+  .osd-row-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    white-space: nowrap;
+  }
+
+  .osd-counter { letter-spacing: 0.1em; }
+
+  .osd-time { letter-spacing: 0.05em; }
+
+  /* Scanlines */
+  .scanlines {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px, transparent 3px,
+      rgba(0,0,0,0.12) 3px, rgba(0,0,0,0.12) 4px
+    );
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  /* Vignette */
+  .vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,0.65) 100%);
+    z-index: 11;
+    pointer-events: none;
+  }
+
+  /* Progress bar */
+  .progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .progress-track {
+    flex: 1;
+    height: 3px;
+    background: #1e1e1e;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--vhs-blue);
+    width: 0%;
+    transition: background 0.3s;
+  }
+  .progress-label {
+    font-size: 0.6rem;
+    color: #444;
+    letter-spacing: 0.1em;
+    min-width: 80px;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  /* ── EDITOR PANEL ────────────────────────── */
+  .editor {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .editor-section-label {
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--label-color);
+    padding-bottom: 6px;
+    border-bottom: 1px solid #1e1e1e;
+  }
+
+  .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .field label {
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--label-color);
+  }
+
+  .field input,
+  .field select {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: #e8e8e8;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 5px 8px;
+    border-radius: 3px;
+    outline: none;
+    width: 100%;
+    transition: border-color 0.15s;
+  }
+
+  .field input:focus,
+  .field select:focus {
+    border-color: #3355cc;
+  }
+
+  .field select option {
+    background: #0e0e0e;
+  }
+
+  /* Speed + Source side by side */
+  .field-row {
+    display: flex;
+    gap: 8px;
+  }
+  .field-row .field { flex: 1; }
+
+  /* Preview button */
+  .btn-preview {
+    background: var(--vhs-blue);
+    color: #fff;
+    border: none;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 9px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.2s, opacity 0.2s;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-preview:hover { background: #1a1adc; }
+  .btn-preview:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    background: #333;
+  }
+
+  .hint {
+    font-size: 0.58rem;
+    color: #3a3a3a;
+    line-height: 1.55;
+    text-align: center;
+    letter-spacing: 0.05em;
+  }
+  .hint strong { color: #555; }
+
+  /* ── RESPONSIVE ──────────────────────────── */
+  @media (max-width: 640px) {
+    .workspace { flex-direction: column; }
+    .editor { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span>📼</span>
+  <span>VHS Blue Screen Generator</span>
+</header>
+
+<div class="workspace">
+
+  <!-- TV SCREEN -->
+  <div class="tv-col">
+    <div class="tv-bezel" id="tvBezel">
+
+      <canvas id="noise"></canvas>
+
+      <div id="blueScreen"></div>
+
+      <div class="osd" id="osd">
+        <div class="osd-row-top">
+          <span id="dChannel">CH&nbsp;&nbsp;3</span>
+          <div class="osd-play">
+            <span class="play-tri"></span>
+            <span>PLAY</span>
+          </div>
+          <span id="dSpeed">SP</span>
+        </div>
+
+        <hr class="osd-divider">
+
+        <div class="osd-center">
+          <div class="osd-source-line" id="dSource">VHS</div>
+          <div class="osd-title-line" id="dTitle">MY HOME VIDEO</div>
+          <div class="osd-sub-line" id="dSubtitle">FAMILY VACATION</div>
+          <div class="osd-field-row">
+            <span id="dDate">JUN 15, 1991</span>
+            <span id="dTime">10:32 AM</span>
+          </div>
+        </div>
+
+        <hr class="osd-divider">
+
+        <div class="osd-row-bottom">
+          <span class="osd-counter" id="dCounter">0:00:00</span>
+          <span id="dExtra">T-120</span>
+        </div>
+      </div>
+
+      <div class="scanlines"></div>
+      <div class="vignette"></div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <span class="progress-label" id="progressLabel">READY</span>
+    </div>
+  </div>
+
+  <!-- EDITOR -->
+  <div class="editor">
+    <div class="editor-section-label">Station / Channel</div>
+    <div class="field-group">
+      <div class="field-row">
+        <div class="field">
+          <label>Channel</label>
+          <input id="fChannel" type="text" value="CH  3" maxlength="8">
+        </div>
+        <div class="field">
+          <label>Speed</label>
+          <select id="fSpeed">
+            <option selected>SP</option>
+            <option>LP</option>
+            <option>EP</option>
+            <option>SLP</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Source</label>
+          <input id="fSource" type="text" value="VHS" maxlength="10">
+        </div>
+        <div class="field">
+          <label>Tape</label>
+          <input id="fExtra" type="text" value="T-120" maxlength="8">
+        </div>
+      </div>
+    </div>
+
+    <div class="editor-section-label">Label Text</div>
+    <div class="field-group">
+      <div class="field">
+        <label>Title</label>
+        <input id="fTitle" type="text" value="MY HOME VIDEO" maxlength="22">
+      </div>
+      <div class="field">
+        <label>Subtitle</label>
+        <input id="fSubtitle" type="text" value="FAMILY VACATION" maxlength="22">
+      </div>
+      <div class="field">
+        <label>Date</label>
+        <input id="fDate" type="text" value="JUN 15, 1991" maxlength="20">
+      </div>
+      <div class="field">
+        <label>Time</label>
+        <input id="fTime" type="text" value="10:32 AM" maxlength="12">
+      </div>
+    </div>
+
+    <button class="btn-preview" id="btnPreview" onclick="startPreview()">
+      <span>▶</span> PREVIEW (30s)
+    </button>
+
+    <p class="hint">
+      Hit <strong>PREVIEW</strong>, then screen-record the TV above.<br><br>
+      Fields update live — edit freely between previews.
+    </p>
+  </div>
+
+</div><!-- .workspace -->
+
+<script>
+// ── FIELD → OSD SYNC ────────────────────────────
+const fieldMap = [
+  ['fChannel',  'dChannel',  true],
+  ['fSpeed',    'dSpeed',    true],
+  ['fSource',   'dSource',   true],
+  ['fExtra',    'dExtra',    true],
+  ['fTitle',    'dTitle',    true],
+  ['fSubtitle', 'dSubtitle', true],
+  ['fDate',     'dDate',     true],
+  ['fTime',     'dTime',     true],
+];
+
+fieldMap.forEach(([fid, did, upper]) => {
+  const input = document.getElementById(fid);
+  const disp  = document.getElementById(did);
+  const sync  = () => { disp.textContent = upper ? input.value.toUpperCase() : input.value; };
+  input.addEventListener('input', sync);
+  input.addEventListener('change', sync);
+});
+
+// ── NOISE CANVAS ────────────────────────────────
+const canvas = document.getElementById('noise');
+const ctx    = canvas.getContext('2d');
+let   noiseActive  = true;
+let   noiseAlpha   = 1.0;
+let   rafId        = null;
+
+function sizeCanvas() {
+  const b = document.getElementById('tvBezel');
+  canvas.width  = b.offsetWidth;
+  canvas.height = b.offsetHeight;
+}
+
+function drawNoise() {
+  if (!noiseActive) return;
+  const w = canvas.width, h = canvas.height;
+  const img  = ctx.createImageData(w, h);
+  const data = img.data;
+  for (let i = 0; i < data.length; i += 4) {
+    // Occasional brighter horizontal bands (tracking artifact)
+    const row  = Math.floor(i / 4 / w);
+    const band = (Math.sin(row * 0.3 + Date.now() * 0.003) > 0.92) ? 220 : 0;
+    const v    = band || (Math.random() < 0.5 ? Math.floor(Math.random() * 90) : Math.floor(180 + Math.random() * 75));
+    data[i] = data[i+1] = data[i+2] = v;
+    data[i+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  canvas.style.opacity = noiseAlpha;
+  rafId = requestAnimationFrame(drawNoise);
+}
+
+window.addEventListener('resize', sizeCanvas);
+sizeCanvas();
+drawNoise();
+
+// ── COUNTER ─────────────────────────────────────
+let counterSec = 0;
+let counterIv  = null;
+
+function fmtCounter(s) {
+  const h  = Math.floor(s / 3600);
+  const m  = Math.floor((s % 3600) / 60);
+  const sc = s % 60;
+  return `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}`;
+}
+
+// ── PREVIEW SEQUENCE ─────────────────────────────
+const TOTAL_MS   = 30000;
+const STATIC_MS  = 1400;   // pure static
+const BLUE_MS    = 1900;   // blue fades in, static fades out
+const OSD_MS     = 2500;   // OSD appears
+
+let running = false;
+const timers = [];
+
+function startPreview() {
+  if (running) return;
+  running = true;
+
+  const btn      = document.getElementById('btnPreview');
+  const blue     = document.getElementById('blueScreen');
+  const osd      = document.getElementById('osd');
+  const fill     = document.getElementById('progressFill');
+  const label    = document.getElementById('progressLabel');
+
+  btn.disabled = true;
+
+  // Reset state
+  blue.style.transition = 'none';
+  blue.style.opacity    = '0';
+  osd.style.transition  = 'none';
+  osd.style.opacity     = '0';
+  noiseActive  = true;
+  noiseAlpha   = 1.0;
+  counterSec   = 0;
+  document.getElementById('dCounter').textContent = '0:00:00';
+  if (counterIv) { clearInterval(counterIv); counterIv = null; }
+  if (!rafId)    drawNoise();
+
+  fill.style.width      = '0%';
+  fill.style.background = 'var(--vhs-blue)';
+  label.textContent     = 'STATIC...';
+
+  const t0 = performance.now();
+
+  // Progress bar tick
+  function tickProgress() {
+    const elapsed = performance.now() - t0;
+    const pct     = Math.min(100, (elapsed / TOTAL_MS) * 100);
+    fill.style.width = pct + '%';
+    if (elapsed < TOTAL_MS) requestAnimationFrame(tickProgress);
+  }
+  requestAnimationFrame(tickProgress);
+
+  // Phase 2: blue screen fades in
+  timers.push(setTimeout(() => {
+    label.textContent         = 'PLAY...';
+    blue.style.transition     = 'opacity 0.6s ease';
+    blue.style.opacity        = '1';
+
+    // Fade static out in parallel
+    let step = 0, steps = 24;
+    const fadeOut = setInterval(() => {
+      step++;
+      noiseAlpha = 1 - (step / steps);
+      if (step >= steps) {
+        noiseAlpha  = 0;
+        noiseActive = false;
+        cancelAnimationFrame(rafId);
+        rafId = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.style.opacity = '0';
+        clearInterval(fadeOut);
+      }
+    }, 25);
+  }, STATIC_MS));
+
+  // Phase 3: OSD appears
+  timers.push(setTimeout(() => {
+    osd.style.transition = 'opacity 0.4s ease';
+    osd.style.opacity    = '1';
+    label.textContent    = 'PLAYING';
+    counterIv = setInterval(() => {
+      counterSec++;
+      document.getElementById('dCounter').textContent = fmtCounter(counterSec);
+    }, 1000);
+  }, OSD_MS));
+
+  // End
+  timers.push(setTimeout(() => {
+    clearInterval(counterIv);
+    counterIv    = null;
+    running      = false;
+    btn.disabled = false;
+    fill.style.background = '#1a6e1a';
+    label.textContent = '✓ DONE — READY AGAIN';
+  }, TOTAL_MS));
+}
+</script>
+</body>
+</html>

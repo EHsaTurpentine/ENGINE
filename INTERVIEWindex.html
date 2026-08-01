@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>THE INDIFFERENCE ENGINE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="no-js">
+<div class="screen">
+  <pre id="boot" aria-hidden="true"></pre>
+
+  <div id="content" hidden>
+    <nav>
+      <a href="archive/lake/">NOW SHOWING/FaLTO: AN INTERVIEW WITH ME BY CLAUDE, THE VAMPIRE (2026)</a><p>
+     <a href="https://ehsaturpentine.github.io/ENGINE/archive/index.html"><-INDF_ENG ARCHIVE></a>
+            <p class="countdown-label">ENDS IN:</p>
+      <p id="countdown" class="countdown" aria-live="polite">CALCULATING...</p>
+      
+      
+    </nav>
+    <main>
+      <h1>THIS IS THE INDIFFERENCE ENGINE.</h1>
+      <p>POST TENEBRAS LUX ESTO UMBRAS FINDENS.</p>
+
+<iframe allow="autoplay *; encrypted-media *; fullscreen *; clipboard-write" frameborder="0" height="450" style="width:100%;max-width:660px;overflow:hidden;border-radius:10px;" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation" src="https://embed.music.apple.com/us/playlist/the-indifference-engineer/pl.u-NJx3TkrBDa"></iframe>
+
+
+    </main>
+  </div>
+</div>
+
+<script>
+  // Boot sequence: "LOAD"THE INDIFFERENCE ENGINE",8" -> "RUN" -> reveal content.
+  // Skips straight to final state if the user prefers reduced motion,
+  // or if JS never runs at all (the <noscript> below handles that case).
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var bootEl = document.getElementById('boot');
+  var contentEl = document.getElementById('content');
+  document.body.classList.remove('no-js');
+
+  function reveal() {
+    bootEl.style.display = 'none';
+    contentEl.hidden = false;
+  }
+
+  if (reduceMotion) {
+    reveal();
+  } else {
+    var lines = [
+      'LOAD"THE INDIFFERENCE ENGINE",8',
+      'SEARCHING FOR THE INDIFFERENCE ENGINE',
+      'LOADING',
+      'READY.',
+      'RUN'
+    ];
+    var i = 0;
+    var typed = '';
+
+    function typeLine() {
+      if (i >= lines.length) {
+        setTimeout(reveal, 400);
+        return;
+      }
+      var line = lines[i];
+      var c = 0;
+      typed += (i > 0 ? '\n' : '');
+      var interval = setInterval(function () {
+        if (c < line.length) {
+          typed += line[c];
+          bootEl.textContent = typed;
+          c++;
+        } else {
+          clearInterval(interval);
+          i++;
+          setTimeout(typeLine, 250);
+        }
+      }, 35);
+    }
+    typeLine();
+  }
+
+  // --- Countdown timer: public access ends at the start of next month ---
+  // Edit the line below whenever the "public until" date changes.
+  // Uses each visitor's own local time zone.
+  var deadline = new Date('2026-08-01T00:00:00');
+
+  var countdownEl = document.getElementById('countdown');
+
+  function updateCountdown() {
+    var now = new Date();
+    var diff = deadline - now;
+
+    if (diff <= 0) {
+      countdownEl.textContent = 'PUBLIC ACCESS PERIOD HAS ENDED';
+      clearInterval(countdownTick);
+      return;
+    }
+
+    var totalSeconds = Math.floor(diff / 1000);
+    var days = Math.floor(totalSeconds / 86400);
+    var hours = Math.floor((totalSeconds % 86400) / 3600);
+    var minutes = Math.floor((totalSeconds % 3600) / 60);
+    var seconds = totalSeconds % 60;
+
+    function pad(n) { return n < 10 ? '0' + n : n; }
+
+    countdownEl.textContent =
+      days + 'D ' + pad(hours) + 'H ' + pad(minutes) + 'M ' + pad(seconds) + 'S';
+  }
+
+  updateCountdown();
+  var countdownTick = setInterval(updateCountdown, 1000);
+</script>
+
+<noscript>
+  <style>
+    #boot { display: none; }
+    #content { display: block !important; }
+  </style>
+</noscript>
+</body>
+</html>

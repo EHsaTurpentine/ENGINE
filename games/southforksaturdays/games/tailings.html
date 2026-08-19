@@ -1,0 +1,1494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TAILINGS!</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0e1424;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Georgia', 'Palatino Linotype', serif;
+    overflow: hidden;
+    color: #f2ead8;
+  }
+  #wrap {
+    position: relative;
+    width: 960px; height: 576px;
+    box-shadow: 0 0 0 5px #241a10, 0 0 0 9px #6b4a2a, 0 0 0 10px #8a6338,
+                0 26px 70px rgba(0,0,0,0.7);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  canvas { display: block; background: #eef2ea; }
+  #hint {
+    position: absolute; bottom: -36px; left: 0; width: 100%;
+    text-align: center; font-size: 12px; color: #9a8f78; letter-spacing: 0.6px;
+  }
+  #hint b { color: #e8b23c; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="576"></canvas>
+</div>
+<div id="hint">&larr;&rarr; / A D RUN &nbsp;&middot;&nbsp; <b>SPACE</b> JUMP &nbsp;&middot;&nbsp; HOLD <b>B</b> BRACE &nbsp;&middot;&nbsp; &darr; / S DUCK &nbsp;&middot;&nbsp; ENTER CONFIRM &nbsp;&middot;&nbsp; SOUND <b>M</b></div>
+<script>
+"use strict";
+
+/* ============================================================
+   TAILINGS! — browser build
+   Fourth of five SOUTH FORK SATURDAYS Playdate games reskinned
+   into standalone HTML/Canvas, in MAILTO!'s hand-drawn style.
+   Built fresh from the Playdate Lua source (tailings/source/main.lua,
+   v3.7, no browser predecessor existed) — every movement constant,
+   stage layout, hazard timing, and panel of ending/title text below
+   is ported 1:1 from that hardware-tuned source, not reinvented.
+   The one necessary substitution: the Lua build's title/ending
+   sequences scroll via the Playdate crank ("reading is rowing") —
+   there's no crank in a browser, so those scroll on Up/Down/W/S or
+   the mouse wheel instead, same substitution CLAIMJUMPER! used.
+   Self-contained vanilla JS + Canvas. No dependencies.
+   ============================================================ */
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// Logic space matches the Playdate build exactly (400x240, 1:1 with the
+// device screen). DRAW_SCALE upsamples that into smooth painted linework
+// instead of nearest-neighbor pixel scaling — same 2.4 used by THE
+// FATHOMING! and CLAIMJUMPER!, the two closest sibling builds (also
+// fresh from-Playdate-spec ports with no browser predecessor).
+const DRAW_SCALE = 2.4;
+const LW = 400, LH = 240;
+const W = cv.width, H = cv.height; // 960 x 576
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ---------------------------------------------------------------
+// input
+let keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyS','KeyA','KeyD','KeyB','Enter'].includes(e.code)) e.preventDefault();
+  initAudio();
+  if (e.code === 'KeyM') soundOn = !soundOn;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+let wheelDelta = 0;
+cv.addEventListener('wheel', e => { wheelDelta += e.deltaY * 0.5; e.preventDefault(); }, { passive: false });
+
+function leftHeld()  { return !!(keys['ArrowLeft']  || keys['KeyA']); }
+function rightHeld() { return !!(keys['ArrowRight'] || keys['KeyD']); }
+function downHeld()  { return !!(keys['ArrowDown']  || keys['KeyS']); }
+function jumpHeld()  { return !!keys['Space']; }
+function braceHeld() { return !!keys['KeyB']; }
+
+// edge-detected buttons (A = Space during play / Enter on menus, matching
+// the Playdate build's single-A-button convention split across contexts
+// the same way B is reused for both "brace" in play and "back" in menus)
+let prevJump = false, prevEnter = false, prevB = false, prevUp = false, prevDown = false;
+let jumpPressed = false, jumpReleased = false, enterPressed = false, bPressed = false, upPressed = false, downPressed = false;
+function pollEdges() {
+  const j = jumpHeld();
+  jumpPressed = j && !prevJump;
+  jumpReleased = !j && prevJump;
+  prevJump = j;
+  const en = !!keys['Enter'];
+  enterPressed = en && !prevEnter;
+  prevEnter = en;
+  const b = braceHeld();
+  bPressed = b && !prevB;
+  prevB = b;
+  const u = !!(keys['ArrowUp'] || keys['KeyW']);
+  upPressed = u && !prevUp;
+  prevUp = u;
+  const d = downHeld();
+  downPressed = d && !prevDown;
+  prevDown = d;
+}
+
+// ---------------------------------------------------------------
+// audio — WebAudio synth helpers in the same spirit as MAILTO's/
+// CLAIMJUMPER!'s tone()/sweep()/noiseHit(): short square/triangle/
+// sawtooth/sine/noise blips and a frame-driven step-sequencer for
+// music, no samples, no dependencies.
+let actx = null, soundOn = true;
+function initAudio() { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } }
+function tone(freq, dur, type, gain, when) {
+  if (!actx || !soundOn) return;
+  const t = (when !== undefined) ? when : actx.currentTime;
+  const o = actx.createOscillator(); const g = actx.createGain();
+  o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(gain, 0.001), t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(actx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+let noiseBuf = null;
+function getNoiseBuffer() {
+  if (noiseBuf || !actx) return noiseBuf;
+  const n = actx.sampleRate * 0.5;
+  noiseBuf = actx.createBuffer(1, n, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  return noiseBuf;
+}
+function noiseHit(dur, gain, when, hp) {
+  if (!actx || !soundOn) return;
+  const buf = getNoiseBuffer(); if (!buf) return;
+  const t = (when !== undefined) ? when : actx.currentTime;
+  const src = actx.createBufferSource(); src.buffer = buf;
+  const g = actx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  let node = src;
+  if (hp) { const f = actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp; node.connect(f); node = f; }
+  node.connect(g); g.connect(actx.destination);
+  src.start(t); src.stop(t + dur + 0.02);
+}
+
+// SFX — ported directly from the Lua's playJumpSFX/playLandSFX/etc
+// (Section 9), same frequencies/durations/waveforms, WebAudio gains
+// standing in for the SDK's velocity parameter.
+function sfxJump() { tone(900, 0.06, 'square', 0.20); }
+function sfxLand(impactSpeed) {
+  let speed = impactSpeed || 0;
+  if (speed > MAX_FALL) speed = MAX_FALL;
+  const freq = 260 - (speed / MAX_FALL) * 120;
+  tone(freq, 0.08, 'triangle', 0.18);
+}
+function sfxStumble() { noiseHit(0.12, 0.24, undefined, 220); }
+function sfxCobbleShift() { tone(90, 0.07, 'sawtooth', 0.15); }
+function sfxSnowCollapse() { noiseHit(0.15, 0.16, undefined, 140); }
+function sfxDeckCrack() { tone(1400, 0.04, 'square', 0.22); }
+function sfxCheckpoint() {
+  if (!actx) return;
+  const t0 = actx.currentTime;
+  tone(660, 0.06, 'square', 0.18, t0);
+  tone(990, 0.08, 'square', 0.20, t0 + 4 / 30);
+}
+function sfxStageClear() {
+  if (!actx) return;
+  const t0 = actx.currentTime;
+  tone(523, 0.08, 'square', 0.20, t0);
+  tone(659, 0.08, 'square', 0.20, t0 + 5 / 30);
+  tone(784, 0.16, 'square', 0.22, t0 + 10 / 30);
+}
+
+// music: two step-sequenced loops, ported note-for-note from
+// TITLE_LEAD_PATTERN/TITLE_BASS_PATTERN and ENDING_LEAD_PATTERN/
+// ENDING_BASS_PATTERN in the Lua (Section 9/10/11). Gameplay itself
+// stays silent — SFX only, no looping music under play, matching
+// THE FATHOMING! and CLAIMJUMPER! after gameplay music was tried and
+// reported as annoying, then cut in both.
+const D4=293.66,E4=329.63,F4=349.23,G4=392.00,A4=440.00,BB4=466.16,C5=523.25,D5=587.33;
+const MUS_TITLE = {
+  rate: 11, dur: 0.7, leadWave: 'sawtooth', bassWave: 'square',
+  lead: [D4,0,F4,0,A4,0,D5,0, C5,0,A4,0,F4,0,G4,0, D4,0,F4,0,A4,0,D5,0, BB4,0,A4,0,G4,0,F4,E4],
+  bass: [D4/2,0,0,0,D4/2,0,0,0, F4/2,0,0,0,F4/2,0,0,0, G4/2,0,0,0,G4/2,0,0,0, A4/2,0,0,0,A4/2,0,0,0],
+};
+const F4b=349.23,G4b=392.00,A4b=415.30,BB4b=466.16,C5b=523.25,D5b=587.33,E5b=659.25,F5=698.46;
+const MUS_ENDING = {
+  rate: 29, dur: 0.7, leadWave: 'sine', bassWave: 'triangle',
+  lead: [F4b,0,0,0,A4b,0,0,0, C5b,0,0,0,F5,0,0,0, E5b,0,0,0,C5b,0,0,0, A4b,0,0,0,F4b,0,0,0],
+  bass: [F4b/2,0,0,0,0,0,0,0, BB4b/2,0,0,0,0,0,0,0, C5b/2,0,0,0,0,0,0,0, F4b/2,0,0,0,0,0,0,0],
+};
+let MUS = { track: null, step: 0, timer: 0 };
+function musicSet(track) { if (MUS.track !== track) { MUS.track = track; MUS.step = 0; MUS.timer = 0; } }
+function musicTick() {
+  if (!MUS.track || !soundOn || !actx) return;
+  MUS.timer -= 1;
+  if (MUS.timer > 0) return;
+  MUS.timer = MUS.track.rate;
+  const ln = MUS.track.lead[MUS.step % MUS.track.lead.length];
+  const bn = MUS.track.bass[MUS.step % MUS.track.bass.length];
+  const dur = (MUS.track.rate / 30) * MUS.track.dur;
+  if (ln) tone(ln, dur, MUS.track.leadWave, 0.10);
+  if (bn) tone(bn, dur * 1.3, MUS.track.bassWave, 0.09);
+  MUS.step++;
+}
+
+// ---------------------------------------------------------------
+// Movement constants — Section 4 of the GDD, ported verbatim from
+// the hardware-tuned Lua source. Do not re-derive these; they are
+// the tuning reference this whole build exists to preserve.
+const GRAVITY = 0.55;
+const MAX_FALL = 9.0;
+const RUN_MAX = 4.2;
+const ACCEL_GROUND = 0.28;
+const ACCEL_AIR = 0.22;
+const JUMP_VEL = -7.2;
+const JUMP_CUT = 0.40;
+const COYOTE_FRAMES = 5;
+const BUFFER_FRAMES = 5;
+const BRACE_MULT = 3.0;
+
+// Shedding + stumble — "the single most important feel-detail in the
+// game." Shed impulse is deliberately NOT clamped to RUN_MAX.
+const SHED_FORCE = 1.8;
+const STUMBLE_FRAMES = 18;
+const STUMBLE_FRICTION = 0.02;
+const STUMBLE_SPEED_THRESHOLD = RUN_MAX * 0.85;
+
+// ---------------------------------------------------------------
+// Tile / surface system
+const TILE_SIZE = 20;
+const SURFACE_FRICTION = { bare: 0.10, needle: 0.05, snow: 0.03, deck: 0.14 };
+const COBBLE_DROP_FRAMES = 14;
+const SNOW_VOID_DROP_FRAMES = 2;
+const DECK_BREAK_FRAMES = 20;
+const WATER_PENALTY_FRAMES = 90; // 3s @ fixed 30fps logic rate
+
+const PLAYER_W = 14, PLAYER_H_STAND = 20, PLAYER_H_DUCK = 12;
+
+const STAGE_NAMES = { 1:"THE BAR", 2:"THE STACK", 3:"WINDROW", 4:"THE HIGH PILE", 5:"FIRST SNOW", 6:"THE DREDGE" };
+const STAGE_CAMERA_MODE = { 1:"horizontal", 2:"vertical", 3:"horizontal", 4:"vertical", 5:"horizontal", 6:"vertical" };
+
+let MAP_COLS = 0, MAP_ROWS = 0;
+let tileMap = [];
+let checkpoints = [];             // vertical stages: [{row,col}, ...], index 0 = lowest (1-based checkpointIndex maps to [index-1])
+let activeCobbles = [];
+let activeOneWayCollapsibles = [];
+let allCollapsibleTiles = [];
+let SPAWN_X = 0, SPAWN_Y = 0, STAGE_FINISH_X = null, STAGE_FINISH_Y = null;
+let CAMERA_MODE = "horizontal";
+let currentStageID = 1;
+
+function newTileRows(rows) { const m = []; for (let r = 0; r < rows; r++) m[r] = {}; return m; }
+
+// ===== Stage builders — ported 1:1 from buildStage1Map..buildStage6Map =====
+
+function buildStage1Map() {
+  // THE BAR — horizontal dash, BARE surface only. Teaching stage.
+  MAP_COLS = 60; MAP_ROWS = 12;
+  const mainFloorRow = 9;
+  tileMap = newTileRows(MAP_ROWS);
+
+  const safetyRow0 = mainFloorRow + 1, safetyRow1 = mainFloorRow + 2;
+  for (let col = 0; col < MAP_COLS; col++) {
+    tileMap[safetyRow0][col] = { solid: true, surface: "bare", shed: 0.0 };
+    tileMap[safetyRow1][col] = { solid: true, surface: "bare", shed: 0.0 };
+  }
+
+  const gaps = [[18,19],[40,42],[49,50]];
+  const cobbleCols = { 20: true, 43: true };
+  const needleCols = { 54: true, 55: true, 56: true, 57: true };
+  for (let col = 0; col < MAP_COLS; col++) {
+    let inGap = false;
+    for (const g of gaps) if (col >= g[0] && col <= g[1]) inGap = true;
+    if (!inGap) {
+      if (cobbleCols[col]) {
+        const tile = { solid: true, surface: "bare", shed: 0.0, looseCobble: true };
+        tileMap[mainFloorRow][col] = tile;
+        allCollapsibleTiles.push(tile);
+      } else if (needleCols[col]) {
+        tileMap[mainFloorRow][col] = { solid: true, surface: "needle", shed: 0.0 };
+      } else {
+        tileMap[mainFloorRow][col] = { solid: true, surface: "bare", shed: 0.0 };
+      }
+    }
+  }
+
+  const pileRow = mainFloorRow - 1;
+  for (const c of [10,30,31,46,47,53]) tileMap[pileRow][c] = { solid: true, surface: "bare", shed: 0.0 };
+
+  SPAWN_X = 20;
+  SPAWN_Y = mainFloorRow * TILE_SIZE - PLAYER_H_STAND;
+  STAGE_FINISH_X = 58 * TILE_SIZE;
+  STAGE_FINISH_Y = null;
+}
+
+function buildZigzagSteps(mapCols, startStepRow) {
+  const steps = [];
+  let stepRow = startStepRow, stepCol = 4, dir = 1;
+  while (stepRow > 2) {
+    steps.push({ row: stepRow, col: stepCol });
+    stepRow -= 2;
+    let nextStepCol = stepCol + dir * 3;
+    if (nextStepCol > mapCols - 3 || nextStepCol < 2) { dir = -dir; nextStepCol = stepCol + dir * 3; }
+    stepCol = nextStepCol;
+  }
+  return steps;
+}
+
+function buildStage2Map() {
+  // THE STACK — vertical ascent, BARE surface. First tower.
+  MAP_COLS = 20; MAP_ROWS = 50;
+  tileMap = newTileRows(MAP_ROWS);
+
+  const steps = buildZigzagSteps(MAP_COLS, MAP_ROWS - 4);
+
+  const startFloorRow = steps[0].row + 2;
+  for (let col = 0; col < MAP_COLS; col++) {
+    tileMap[startFloorRow][col] = { solid: true, surface: "bare", shed: 0.0, isStartFloor: true };
+  }
+
+  const checkpointAtStep = { 6:1, 12:2, 17:3 };
+  const shedAtStep = { 4:-0.8, 19:0.8 };
+
+  for (let i = 1; i <= steps.length; i++) {
+    const step = steps[i-1];
+    const cpIndex = checkpointAtStep[i];
+    if (cpIndex) {
+      for (let dc = -1; dc <= 1; dc++) {
+        tileMap[step.row][step.col+dc] = { solid:true, surface:"bare", shed:0.0, checkpoint:true, checkpointIndex:cpIndex };
+      }
+      checkpoints[cpIndex-1] = { row: step.row, col: step.col };
+    } else {
+      const shed = shedAtStep[i] || 0.0;
+      for (let dc = 0; dc <= 1; dc++) {
+        tileMap[step.row][step.col+dc] = { solid:true, surface:"bare", shed:shed };
+      }
+    }
+  }
+
+  const topStep = steps[steps.length-1];
+  STAGE_FINISH_Y = topStep.row * TILE_SIZE - TILE_SIZE;
+  STAGE_FINISH_X = null;
+  SPAWN_X = 20;
+  SPAWN_Y = startFloorRow * TILE_SIZE - PLAYER_H_STAND;
+}
+
+function buildStage3Map() {
+  // WINDROW — horizontal dash, BARE + NEEDLE. Long ridgelines.
+  MAP_COLS = 80; MAP_ROWS = 16;
+  const mainFloorRow = 9;
+  tileMap = newTileRows(MAP_ROWS);
+
+  for (let col = 0; col < MAP_COLS; col++) {
+    for (let d = 1; d <= 4; d++) tileMap[mainFloorRow+d][col] = { solid:true, surface:"bare", shed:0.0 };
+  }
+
+  const gaps = [[25,27],[55,58]];
+  const needlePatches = [[20,24],[50,54]];
+  for (let col = 0; col < MAP_COLS; col++) {
+    let inGap = false;
+    for (const g of gaps) if (col >= g[0] && col <= g[1]) inGap = true;
+    if (!inGap) {
+      let surface = "bare";
+      for (const p of needlePatches) if (col >= p[0] && col <= p[1]) surface = "needle";
+      tileMap[mainFloorRow][col] = { solid:true, surface, shed:0.0 };
+    }
+  }
+
+  const pileRow = mainFloorRow - 1;
+  for (const c of [12,40,41]) tileMap[pileRow][c] = { solid:true, surface:"bare", shed:0.0 };
+
+  for (const c of [30,31,32,65]) {
+    const tile = { solid:true, surface:"bare", shed:0.0, looseCobble:true };
+    tileMap[mainFloorRow][c] = tile;
+    allCollapsibleTiles.push(tile);
+  }
+
+  SPAWN_X = 20;
+  SPAWN_Y = mainFloorRow * TILE_SIZE - PLAYER_H_STAND;
+  STAGE_FINISH_X = 78 * TILE_SIZE;
+  STAGE_FINISH_Y = null;
+}
+
+function buildStage4Map() {
+  // THE HIGH PILE — vertical ascent, NEEDLE surface throughout. Tallest.
+  MAP_COLS = 20; MAP_ROWS = 75;
+  tileMap = newTileRows(MAP_ROWS);
+
+  const steps = buildZigzagSteps(MAP_COLS, MAP_ROWS - 4);
+
+  const startFloorRow = steps[0].row + 2;
+  for (let col = 0; col < MAP_COLS; col++) {
+    tileMap[startFloorRow][col] = { solid:true, surface:"needle", shed:0.0, isStartFloor:true };
+  }
+
+  const checkpointAtStep = { 9:1, 18:2, 27:3 };
+  const cobbleAtStep = { 5:true, 22:true, 31:true };
+
+  for (let i = 1; i <= steps.length; i++) {
+    const step = steps[i-1];
+    const cpIndex = checkpointAtStep[i];
+    if (cpIndex) {
+      for (let dc = -1; dc <= 1; dc++) {
+        tileMap[step.row][step.col+dc] = { solid:true, surface:"needle", shed:0.0, checkpoint:true, checkpointIndex:cpIndex };
+      }
+      checkpoints[cpIndex-1] = { row: step.row, col: step.col };
+    } else if (cobbleAtStep[i]) {
+      for (let dc = 0; dc <= 1; dc++) {
+        const tile = { solid:true, surface:"needle", shed:0.0, looseCobble:true };
+        tileMap[step.row][step.col+dc] = tile;
+        allCollapsibleTiles.push(tile);
+      }
+    } else {
+      for (let dc = 0; dc <= 1; dc++) {
+        tileMap[step.row][step.col+dc] = { solid:true, surface:"needle", shed:0.0 };
+      }
+    }
+  }
+
+  const topStep = steps[steps.length-1];
+  STAGE_FINISH_Y = topStep.row * TILE_SIZE - TILE_SIZE;
+  STAGE_FINISH_X = null;
+  SPAWN_X = 20;
+  SPAWN_Y = startFloorRow * TILE_SIZE - PLAYER_H_STAND;
+}
+
+function buildStage5Map() {
+  // FIRST SNOW — horizontal dash, SNOW surface throughout. Surface lies.
+  MAP_COLS = 80; MAP_ROWS = 16;
+  const mainFloorRow = 9;
+  tileMap = newTileRows(MAP_ROWS);
+
+  const realGaps = [[15,16],[60,62]];
+  const voidCols = [35,45,70];
+  const voidColSet = {}; for (const c of voidCols) voidColSet[c] = true;
+
+  for (let col = 0; col < MAP_COLS; col++) {
+    let inGap = false;
+    for (const g of realGaps) if (col >= g[0] && col <= g[1]) inGap = true;
+    if (!inGap) {
+      const tile = { solid:true, surface:"snow", shed:0.0 };
+      if (voidColSet[col]) { tile.snowVoid = true; allCollapsibleTiles.push(tile); }
+      tileMap[mainFloorRow][col] = tile;
+    }
+  }
+
+  for (const g of realGaps) {
+    for (let col = g[0]-1; col <= g[1]+1; col++) {
+      tileMap[mainFloorRow+1][col] = { solid:true, surface:"snow", shed:0.0 };
+      tileMap[mainFloorRow+2][col] = { solid:true, surface:"snow", shed:0.0 };
+    }
+  }
+
+  for (const c of voidCols) {
+    tileMap[mainFloorRow+2][c] = { solid:true, surface:"snow", shed:0.0 };
+    tileMap[mainFloorRow+1][c-1] = { solid:true, surface:"snow", shed:0.0 };
+    tileMap[mainFloorRow+2][c-1] = { solid:true, surface:"snow", shed:0.0 };
+    tileMap[mainFloorRow+1][c+1] = { solid:true, surface:"snow", shed:0.0 };
+    tileMap[mainFloorRow+2][c+1] = { solid:true, surface:"snow", shed:0.0 };
+  }
+
+  const pileRow = mainFloorRow - 1;
+  for (const c of [10,50]) tileMap[pileRow][c] = { solid:true, surface:"snow", shed:0.0 };
+
+  SPAWN_X = 20;
+  SPAWN_Y = mainFloorRow * TILE_SIZE - PLAYER_H_STAND;
+  STAGE_FINISH_X = 78 * TILE_SIZE;
+  STAGE_FINISH_Y = null;
+}
+
+function buildStage6Map() {
+  // THE DREDGE — vertical ascent to finale. SNOW + DECK. "...and stop."
+  MAP_COLS = 20; MAP_ROWS = 55;
+  tileMap = newTileRows(MAP_ROWS);
+
+  // Stage 6's zigzag stops at stepRow > 10 (not the > 2 the other zigzag
+  // stages use), since it needs to stop short of the top to leave room
+  // for the deck platform above — built inline rather than reusing
+  // buildZigzagSteps, which is hardcoded to the > 2 stop condition.
+  const steps6 = [];
+  { let stepRow = MAP_ROWS - 8, stepCol = 4, dir = 1;
+    while (stepRow > 10) {
+      steps6.push({ row: stepRow, col: stepCol });
+      stepRow -= 2;
+      let nextStepCol = stepCol + dir * 3;
+      if (nextStepCol > MAP_COLS - 3 || nextStepCol < 2) { dir = -dir; nextStepCol = stepCol + dir * 3; }
+      stepCol = nextStepCol;
+    }
+  }
+
+  const checkpointAtStep = { 7:1, 13:2 };
+  const voidAtStep = { 4:true };
+
+  for (let i = 1; i <= steps6.length; i++) {
+    const step = steps6[i-1];
+    const cpIndex = checkpointAtStep[i];
+    if (cpIndex) {
+      for (let dc = -1; dc <= 1; dc++) {
+        tileMap[step.row][step.col+dc] = { solid:true, surface:"snow", shed:0.0, checkpoint:true, checkpointIndex:cpIndex };
+      }
+      checkpoints[cpIndex-1] = { row: step.row, col: step.col };
+    } else if (voidAtStep[i]) {
+      for (let dc = 0; dc <= 1; dc++) {
+        const tile = { solid:true, surface:"snow", shed:0.0, snowVoid:true };
+        tileMap[step.row][step.col+dc] = tile;
+        allCollapsibleTiles.push(tile);
+      }
+    } else {
+      for (let dc = 0; dc <= 1; dc++) {
+        tileMap[step.row][step.col+dc] = { solid:true, surface:"snow", shed:0.0 };
+      }
+    }
+  }
+
+  const bottomStepRow = steps6[0].row;
+  const spawnRow = bottomStepRow + 2;
+  const pondRow = spawnRow + 2;
+  for (let dc = -1; dc <= 1; dc++) tileMap[spawnRow][2+dc] = { solid:true, surface:"snow", shed:0.0 };
+  for (let col = 0; col < MAP_COLS; col++) tileMap[pondRow][col] = { water: true };
+
+  const topStep = steps6[steps6.length-1];
+  const deckRow = topStep.row - 2;
+  const deckStartCol = 2, deckEndCol = 17;
+  for (let col = deckStartCol; col <= deckEndCol; col++) {
+    const tile = { solid:true, surface:"deck", shed:0.0, deckBoard:true };
+    tileMap[deckRow][col] = tile;
+    allCollapsibleTiles.push(tile);
+  }
+
+  STAGE_FINISH_X = 16 * TILE_SIZE;
+  STAGE_FINISH_Y = deckRow * TILE_SIZE;
+
+  SPAWN_X = 2 * TILE_SIZE;
+  SPAWN_Y = spawnRow * TILE_SIZE - PLAYER_H_STAND;
+}
+
+function buildStageMap(id) {
+  if (id === 1) buildStage1Map();
+  else if (id === 2) buildStage2Map();
+  else if (id === 3) buildStage3Map();
+  else if (id === 4) buildStage4Map();
+  else if (id === 5) buildStage5Map();
+  else buildStage6Map();
+}
+
+function tileAt(col, row) {
+  const rowData = tileMap[row];
+  if (!rowData) return null;
+  return rowData[col] || null;
+}
+function isSolidAt(col, row) {
+  const t = tileAt(col, row);
+  return !!(t && t.solid === true);
+}
+
+// ---------------------------------------------------------------
+// Player state + physics — ported 1:1 from updatePlayer/resolveHorizontal/
+// resolveVertical (Section 4/6).
+const player = {
+  x: 0, y: 0, vx: 0, vy: 0,
+  onGround: false, ducking: false,
+  coyoteFramesLeft: 0, jumpBufferFramesLeft: 0,
+  groundTile: null, groundCol: null, groundRow: null,
+  state: "normal", stumbleFramesLeft: 0,
+};
+function playerHeight() { return player.ducking ? PLAYER_H_DUCK : PLAYER_H_STAND; }
+
+let stageFrames = 0;
+let sessionBestFrames = {};
+let completedStages = {};
+let lastClearFrames = null;
+let totalRunFrames = 0;
+let currentCheckpointIndex = 0;
+
+function formatTime(frames) {
+  const centis = Math.floor(frames * 100 / 30 + 0.5);
+  const minutes = Math.floor(centis / 6000);
+  const seconds = Math.floor((centis % 6000) / 100);
+  const hundredths = centis % 100;
+  return minutes + ":" + String(seconds).padStart(2,'0') + "." + String(hundredths).padStart(2,'0');
+}
+function formatDelta(frames, bestFrames) {
+  let diff = frames - bestFrames;
+  let sign = "+";
+  if (diff < 0) { sign = "-"; diff = -diff; }
+  return sign + formatTime(diff);
+}
+
+function resetStage() {
+  player.x = SPAWN_X; player.y = SPAWN_Y;
+  player.vx = 0; player.vy = 0;
+  player.onGround = false; player.ducking = false;
+  player.coyoteFramesLeft = 0; player.jumpBufferFramesLeft = 0;
+  player.groundTile = null; player.groundCol = null; player.groundRow = null;
+  player.state = "normal"; player.stumbleFramesLeft = 0;
+  stageFrames = 0;
+  currentCheckpointIndex = 0;
+
+  for (const t of allCollapsibleTiles) { t.solid = true; t.collapseState = null; t.collapseTimer = null; }
+  activeCobbles = [];
+  activeOneWayCollapsibles = [];
+}
+
+function resolveHorizontal() {
+  const h = playerHeight();
+  const top = player.y, bottom = player.y + h;
+  const row0 = Math.floor(top / TILE_SIZE);
+  const row1 = Math.floor((bottom - 0.001) / TILE_SIZE);
+
+  if (player.vx > 0) {
+    const col1 = Math.floor((player.x + PLAYER_W - 0.001) / TILE_SIZE);
+    for (let row = row0; row <= row1; row++) {
+      if (isSolidAt(col1, row)) { player.x = col1 * TILE_SIZE - PLAYER_W; player.vx = 0; break; }
+    }
+  } else if (player.vx < 0) {
+    const col0 = Math.floor(player.x / TILE_SIZE);
+    for (let row = row0; row <= row1; row++) {
+      if (isSolidAt(col0, row)) { player.x = (col0 + 1) * TILE_SIZE; player.vx = 0; break; }
+    }
+  }
+}
+
+function resolveVertical() {
+  const h = playerHeight();
+  const col0 = Math.floor(player.x / TILE_SIZE);
+  const col1 = Math.floor((player.x + PLAYER_W - 0.001) / TILE_SIZE);
+
+  player.onGround = false; player.groundTile = null; player.groundCol = null; player.groundRow = null;
+
+  if (player.vy > 0) {
+    const bottom = player.y + h;
+    const row1 = Math.floor((bottom - 0.001) / TILE_SIZE);
+    for (let col = col0; col <= col1; col++) {
+      const t = tileAt(col, row1);
+      if (t && t.solid) {
+        player.y = row1 * TILE_SIZE - h; player.vy = 0; player.onGround = true;
+        player.groundTile = t; player.groundCol = col; player.groundRow = row1;
+        break;
+      }
+    }
+  } else if (player.vy < 0) {
+    const row0 = Math.floor(player.y / TILE_SIZE);
+    for (let col = col0; col <= col1; col++) {
+      if (isSolidAt(col, row0)) { player.y = (row0 + 1) * TILE_SIZE; player.vy = 0; break; }
+    }
+  }
+}
+
+function updatePlayer() {
+  const wasGrounded = player.onGround;
+
+  if (player.state === "stumble") {
+    player.ducking = false;
+  } else {
+    const bracing = braceHeld();
+    player.ducking = downHeld() && player.onGround;
+
+    const left = leftHeld(), right = rightHeld();
+
+    if (jumpPressed) player.jumpBufferFramesLeft = BUFFER_FRAMES;
+
+    let groundFriction = SURFACE_FRICTION.bare;
+    if (player.onGround && player.groundTile) {
+      groundFriction = SURFACE_FRICTION[player.groundTile.surface] || SURFACE_FRICTION.bare;
+    }
+
+    if (bracing && player.onGround) {
+      const friction = groundFriction * BRACE_MULT;
+      player.vx = player.vx * (1 - friction);
+    } else {
+      const accel = player.onGround ? ACCEL_GROUND : ACCEL_AIR;
+      if (left && !right) player.vx -= accel;
+      else if (right && !left) player.vx += accel;
+      else if (player.onGround) player.vx = player.vx * (1 - groundFriction);
+
+      if (player.vx > RUN_MAX) player.vx = RUN_MAX;
+      else if (player.vx < -RUN_MAX) player.vx = -RUN_MAX;
+    }
+  }
+
+  player.vy += GRAVITY;
+  if (player.vy > MAX_FALL) player.vy = MAX_FALL;
+
+  if (player.state !== "stumble") {
+    if (jumpReleased && player.vy < 0) player.vy *= JUMP_CUT;
+
+    if (player.onGround) player.coyoteFramesLeft = COYOTE_FRAMES;
+    else if (player.coyoteFramesLeft > 0) player.coyoteFramesLeft -= 1;
+
+    if (player.jumpBufferFramesLeft > 0 && player.coyoteFramesLeft > 0) {
+      player.vy = JUMP_VEL; player.onGround = false;
+      player.coyoteFramesLeft = 0; player.jumpBufferFramesLeft = 0;
+      sfxJump();
+    } else if (player.jumpBufferFramesLeft > 0) {
+      player.jumpBufferFramesLeft -= 1;
+    }
+  }
+
+  player.x += player.vx;
+  resolveHorizontal();
+
+  const incomingVY = player.vy;
+  player.y += player.vy;
+  resolveVertical();
+
+  if (CAMERA_MODE === "vertical" && player.onGround && player.groundTile) {
+    const gt = player.groundTile;
+    if (gt.checkpoint && gt.checkpointIndex > currentCheckpointIndex) {
+      currentCheckpointIndex = gt.checkpointIndex;
+      sfxCheckpoint();
+    } else if (gt.isStartFloor && !wasGrounded && currentCheckpointIndex > 0) {
+      const cp = checkpoints[currentCheckpointIndex - 1];
+      player.x = cp.col * TILE_SIZE; player.y = cp.row * TILE_SIZE - playerHeight();
+      player.vx = 0; player.vy = 0;
+    }
+  }
+
+  if (player.onGround && player.groundTile && player.groundTile.collapseState == null) {
+    const gt = player.groundTile;
+    if (gt.looseCobble) {
+      gt.collapseState = "counting"; gt.collapseTimer = COBBLE_DROP_FRAMES;
+      activeCobbles.push({ row: player.groundRow, col: player.groundCol, tile: gt });
+      sfxCobbleShift();
+    } else if (gt.snowVoid) {
+      gt.collapseState = "counting"; gt.collapseTimer = SNOW_VOID_DROP_FRAMES;
+      activeOneWayCollapsibles.push(gt);
+    } else if (gt.deckBoard) {
+      gt.collapseState = "counting"; gt.collapseTimer = DECK_BREAK_FRAMES;
+      activeOneWayCollapsibles.push(gt);
+    }
+  }
+
+  if (CAMERA_MODE === "vertical") {
+    const h = playerHeight();
+    const wcol0 = Math.floor(player.x / TILE_SIZE);
+    const wcol1 = Math.floor((player.x + PLAYER_W - 0.001) / TILE_SIZE);
+    const wrow0 = Math.floor(player.y / TILE_SIZE);
+    const wrow1 = Math.floor((player.y + h - 0.001) / TILE_SIZE);
+    let touchedWater = false;
+    for (let row = wrow0; row <= wrow1; row++) {
+      for (let col = wcol0; col <= wcol1; col++) {
+        const t = tileAt(col, row);
+        if (t && t.water) touchedWater = true;
+      }
+    }
+    if (touchedWater) {
+      if (currentCheckpointIndex > 0) {
+        const cp = checkpoints[currentCheckpointIndex - 1];
+        player.x = cp.col * TILE_SIZE; player.y = cp.row * TILE_SIZE - playerHeight();
+      } else {
+        player.x = SPAWN_X; player.y = SPAWN_Y;
+      }
+      player.vx = 0; player.vy = 0;
+      stageFrames += WATER_PENALTY_FRAMES;
+    }
+  }
+
+  if (!wasGrounded && player.onGround && player.groundTile) {
+    sfxLand(incomingVY);
+
+    const shed = player.groundTile.shed;
+    const playerCenterX = player.x + PLAYER_W / 2;
+    const tileCenterX = (player.groundCol + 0.5) * TILE_SIZE;
+    const halfTile = TILE_SIZE / 2;
+    const offset = Math.abs(playerCenterX - tileCenterX);
+    const centeredness = 1 - Math.min(offset / halfTile, 1);
+    player.vx += shed * SHED_FORCE * (1 - centeredness);
+
+    if (Math.abs(player.vx) > STUMBLE_SPEED_THRESHOLD) {
+      player.state = "stumble";
+      player.stumbleFramesLeft = STUMBLE_FRAMES;
+      player.jumpBufferFramesLeft = 0;
+      sfxStumble();
+    }
+  }
+
+  if (player.state === "stumble") {
+    if (player.onGround) player.vx = player.vx * (1 - STUMBLE_FRICTION);
+    player.stumbleFramesLeft -= 1;
+    if (player.stumbleFramesLeft <= 0) player.state = "normal";
+  }
+
+  if (player.y > MAP_ROWS * TILE_SIZE + 200) {
+    player.x = SPAWN_X; player.y = SPAWN_Y;
+    player.vx = 0; player.vy = 0;
+    player.state = "normal"; player.stumbleFramesLeft = 0;
+  }
+
+  if (player.x < 0) { player.x = 0; player.vx = 0; }
+  else if (player.x > MAP_COLS * TILE_SIZE - PLAYER_W) { player.x = MAP_COLS * TILE_SIZE - PLAYER_W; player.vx = 0; }
+}
+
+// ---------------------------------------------------------------
+// Camera — ported 1:1 from updateCamera (Section 5).
+const camera = { x: 0, y: 0 };
+let cameraLookahead = 0;
+const CAM_H_DEADZONE = 40, CAM_H_LOOKAHEAD_MAX = 60, CAM_H_LOOKAHEAD_RATE = 0.05, CAM_V_DEADZONE = 70;
+
+function updateCamera() {
+  const worldW = MAP_COLS * TILE_SIZE, worldH = MAP_ROWS * TILE_SIZE;
+
+  if (CAMERA_MODE === "horizontal") {
+    let targetLookahead = 0;
+    if (player.vx > 0.2) targetLookahead = CAM_H_LOOKAHEAD_MAX;
+    else if (player.vx < -0.2) targetLookahead = -CAM_H_LOOKAHEAD_MAX;
+    cameraLookahead += (targetLookahead - cameraLookahead) * CAM_H_LOOKAHEAD_RATE;
+
+    const playerCenterX = player.x + PLAYER_W / 2;
+    const targetCenterX = playerCenterX + cameraLookahead;
+    const camCenterX = camera.x + LW / 2;
+    const diff = targetCenterX - camCenterX;
+    if (diff > CAM_H_DEADZONE) camera.x += (diff - CAM_H_DEADZONE);
+    else if (diff < -CAM_H_DEADZONE) camera.x += (diff + CAM_H_DEADZONE);
+
+    camera.y = 0;
+  } else {
+    camera.x = 0;
+    const playerCenterY = player.y + playerHeight() / 2;
+    const camCenterY = camera.y + LH / 2;
+    const diff = playerCenterY - camCenterY;
+    if (diff > CAM_V_DEADZONE) camera.y += (diff - CAM_V_DEADZONE);
+    else if (diff < -CAM_V_DEADZONE) camera.y += (diff + CAM_V_DEADZONE);
+  }
+
+  const maxCamX = Math.max(0, worldW - LW);
+  const maxCamY = Math.max(0, worldH - LH);
+  camera.x = clamp(camera.x, 0, maxCamX);
+  camera.y = clamp(camera.y, 0, maxCamY);
+}
+
+// ---------------------------------------------------------------
+// Collapsible tiles — ported 1:1 from updateCobbles/updateOneWayCollapsibles.
+function updateCobbles() {
+  if (activeCobbles.length === 0) return;
+  const colStart = Math.floor(camera.x / TILE_SIZE), colEnd = Math.floor((camera.x + LW - 1) / TILE_SIZE);
+  const rowStart = Math.floor(camera.y / TILE_SIZE), rowEnd = Math.floor((camera.y + LH - 1) / TILE_SIZE);
+
+  const stillActive = [];
+  for (const entry of activeCobbles) {
+    const t = entry.tile;
+    if (t.collapseState === "counting") {
+      t.collapseTimer -= 1;
+      if (t.collapseTimer <= 0) { t.collapseState = "dropped"; t.solid = false; }
+      stillActive.push(entry);
+    } else if (t.collapseState === "dropped") {
+      const offscreen = entry.col < colStart || entry.col > colEnd || entry.row < rowStart || entry.row > rowEnd;
+      if (offscreen) { t.collapseState = null; t.collapseTimer = null; t.solid = true; }
+      else stillActive.push(entry);
+    }
+  }
+  activeCobbles = stillActive;
+}
+function updateOneWayCollapsibles() {
+  if (activeOneWayCollapsibles.length === 0) return;
+  const stillCounting = [];
+  for (const t of activeOneWayCollapsibles) {
+    t.collapseTimer -= 1;
+    if (t.collapseTimer <= 0) {
+      t.collapseState = "dropped"; t.solid = false;
+      if (t.snowVoid) sfxSnowCollapse();
+      else if (t.deckBoard) sfxDeckCrack();
+    } else {
+      stillCounting.push(t);
+    }
+  }
+  activeOneWayCollapsibles = stillCounting;
+}
+
+// ---------------------------------------------------------------
+// text helpers (Georgia serif throughout, real bold + emboss for
+// headline text — the browser's actual bold weight, replacing the
+// Lua's faked-bold stacked-offset hack, same call CLAIMJUMPER! made).
+function ctext(s, y, opt) { ctextAt(s, LW / 2, y, opt); }
+function ctextAt(s, x, y, opt) {
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = (opt && opt.font) || '13px Georgia';
+  ctx.fillStyle = (opt && opt.color) || '#2b1d10';
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function ltext(s, x, y, opt) {
+  ctx.save();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.font = (opt && opt.font) || '13px Georgia';
+  ctx.fillStyle = (opt && opt.color) || '#2b1d10';
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function rtext(s, rightX, y, opt) {
+  ctx.save();
+  ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+  ctx.font = (opt && opt.font) || '13px Georgia';
+  ctx.fillStyle = (opt && opt.color) || '#2b1d10';
+  ctx.fillText(s, rightX, y);
+  ctx.restore();
+}
+function boldCText(s, y, size) {
+  size = size || 26;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `bold ${size}px Georgia`;
+  ctx.fillStyle = 'rgba(30,18,8,0.45)';
+  ctx.fillText(s, LW / 2 + 1, y + 1.4);
+  ctx.fillStyle = '#2b1d10';
+  ctx.fillText(s, LW / 2, y);
+  ctx.lineWidth = 0.6; ctx.strokeStyle = 'rgba(232,178,60,0.55)';
+  ctx.strokeText(s, LW / 2, y);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------
+// palette — MAILTO!'s warm earthy hex family (browns/tans/golds),
+// with cool cream/white added for FIRST SNOW's blanketed ground.
+// No shadeColor(hex,%) helper anywhere here, per MAILTO!'s own
+// source — volume comes from rgba highlight/shadow facets and
+// gradients laid directly over flat fills.
+const PAL = {
+  ink: '#2b1d10', cream: '#f2ead8', gold: '#e8b23c', gold2: '#e8d24a',
+  rockDk: '#3a2a1c', rockMd: '#6b4a2a', rockLt: '#8a6338',
+  needleGr: '#5c6b3a',
+  snowHi: '#fdfaf3', snowSh: '#c8d6dc',
+  wood: '#6b4a2a', woodDk: '#4a3018', woodLt: '#8a6338',
+  waterDp: '#2f5064', waterLt: '#5c93ab', waterFoam: 'rgba(242,234,216,0.5)',
+  sky1: '#dce6e2', sky2: '#eef2ea', sky3: '#f6ecc8',
+};
+
+// ---------------------------------------------------------------
+// tile art — painted MAILTO!-style, replacing the Lua's chunky 1-bit
+// fills. No gfx.setPattern equivalent used (fillPolygon-alternative
+// path/gradient/arc calls only), texture from hand-placed facets.
+function drawBareTile(tx, ty, col, row) {
+  ctx.fillStyle = PAL.rockMd;
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx + TILE_SIZE, ty); ctx.lineTo(tx, ty + TILE_SIZE * 0.5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  ctx.beginPath(); ctx.moveTo(tx + TILE_SIZE, ty + TILE_SIZE); ctx.lineTo(tx, ty + TILE_SIZE); ctx.lineTo(tx + TILE_SIZE, ty + TILE_SIZE * 0.5); ctx.closePath(); ctx.fill();
+  const seed = (col * 7 + row * 13) % 4;
+  ctx.fillStyle = PAL.rockLt;
+  if (seed === 0) ctx.fillRect(tx + 3, ty + 3, 4, 3);
+  else if (seed === 1) ctx.fillRect(tx + TILE_SIZE - 7, ty + 4, 4, 3);
+  else if (seed === 2) ctx.fillRect(tx + 5, ty + TILE_SIZE - 7, 3, 4);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 0.7;
+  ctx.strokeRect(tx + 0.4, ty + 0.4, TILE_SIZE - 0.8, TILE_SIZE - 0.8);
+}
+function drawNeedleTile(tx, ty, col, row) {
+  drawBareTile(tx, ty, col, row);
+  ctx.fillStyle = PAL.needleGr;
+  const seed = (col * 5 + row * 11) % 5;
+  for (let i = 0; i < 5; i++) {
+    const dx = 3 + ((i * 7 + seed * 3) % (TILE_SIZE - 6));
+    const dy = 3 + ((i * 11 + seed * 5) % (TILE_SIZE - 6));
+    ctx.save(); ctx.translate(tx + dx, ty + dy); ctx.rotate((i + seed) * 0.7);
+    ctx.fillRect(-2.2, -0.4, 4.4, 0.8);
+    ctx.restore();
+  }
+}
+function drawSnowTile(tx, ty) {
+  // Must render byte-for-byte the same whether this is an ordinary snow
+  // tile or a hidden snow-void trap — the deception is the entire point
+  // (Section 8: no seed-based variance here, unlike drawBareTile).
+  const g = ctx.createLinearGradient(tx, ty, tx, ty + TILE_SIZE);
+  g.addColorStop(0, PAL.snowHi); g.addColorStop(1, '#eef4ee');
+  ctx.fillStyle = g;
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = PAL.snowSh; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(tx, ty + 3);
+  ctx.quadraticCurveTo(tx + TILE_SIZE * 0.5, ty - 1, tx + TILE_SIZE, ty + 3);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(180,190,196,0.5)'; ctx.lineWidth = 0.6;
+  ctx.strokeRect(tx + 0.4, ty + 0.4, TILE_SIZE - 0.8, TILE_SIZE - 0.8);
+}
+function drawDeckTile(tx, ty) {
+  const g = ctx.createLinearGradient(tx, ty, tx, ty + TILE_SIZE);
+  g.addColorStop(0, PAL.woodLt); g.addColorStop(1, PAL.woodDk);
+  ctx.fillStyle = g;
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(tx + 1, ty + TILE_SIZE * 0.5); ctx.lineTo(tx + TILE_SIZE - 1, ty + TILE_SIZE * 0.5); ctx.stroke();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 0.7;
+  ctx.strokeRect(tx + 0.4, ty + 0.4, TILE_SIZE - 0.8, TILE_SIZE - 0.8);
+}
+function drawCollapseTelegraph(tx, ty) {
+  // Loose cobble / deck boards get an irregular telegraphed crack while
+  // counting down (Section 6) — snow voids get NO such tell, drawn as
+  // plain drawSnowTile right up until they drop.
+  ctx.strokeStyle = 'rgba(43,29,16,0.55)'; ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(tx + 2, ty + TILE_SIZE - 2); ctx.lineTo(tx + TILE_SIZE * 0.5, ty + TILE_SIZE * 0.4);
+  ctx.lineTo(tx + TILE_SIZE - 3, ty + TILE_SIZE - 4); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tx + TILE_SIZE * 0.5, ty + TILE_SIZE * 0.4); ctx.lineTo(tx + 4, ty + 3); ctx.stroke();
+}
+function drawWaterTile(tx, ty, t) {
+  const g = ctx.createLinearGradient(tx, ty, tx, ty + TILE_SIZE);
+  g.addColorStop(0, PAL.waterLt); g.addColorStop(1, PAL.waterDp);
+  ctx.fillStyle = g;
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = PAL.waterFoam; ctx.lineWidth = 1;
+  ctx.beginPath();
+  const yy = ty + TILE_SIZE * 0.35 + Math.sin((tx * 0.1) + t * 0.09) * 1.4;
+  ctx.moveTo(tx, yy); ctx.lineTo(tx + TILE_SIZE, yy + Math.sin((tx * 0.1) + t * 0.09 + 1) * 1.2);
+  ctx.stroke();
+  ctx.beginPath();
+  const yy2 = ty + TILE_SIZE * 0.7 + Math.cos((tx * 0.1) + t * 0.07) * 1.2;
+  ctx.moveTo(tx, yy2); ctx.lineTo(tx + TILE_SIZE, yy2);
+  ctx.stroke();
+}
+
+function drawDredgeSilhouette(x, y, scale) {
+  scale = scale || 1;
+  ctx.fillStyle = PAL.rockDk;
+  ctx.fillRect(x, y, 80 * scale, 12 * scale);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fillRect(x, y, 80 * scale, 2 * scale);
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(x + 15 * scale, y - 20 * scale, 30 * scale, 20 * scale);
+  ctx.strokeStyle = PAL.woodDk; ctx.lineWidth = 2 * scale;
+  ctx.beginPath(); ctx.moveTo(x + 70 * scale, y - 5 * scale); ctx.lineTo(x + 110 * scale, y - 45 * scale); ctx.stroke();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.2 * scale;
+  ctx.beginPath(); ctx.moveTo(x + 68 * scale, y - 2 * scale); ctx.lineTo(x + 108 * scale, y - 42 * scale); ctx.stroke();
+}
+
+// Player poses — painted silhouette at PLAYER_W x (stand 20 / duck 12),
+// posed per-state the same way the Lua's drawPlayer does (run cycle,
+// jump/fall tuck, brace crouch, stumble flail), repainted with facet
+// shading instead of flat rects.
+function drawPlayer(screenX, screenY, h) {
+  const w = PLAYER_W, cx = screenX + w / 2;
+  ctx.strokeStyle = PAL.ink; ctx.fillStyle = PAL.ink; ctx.lineWidth = 1.3;
+
+  if (player.state === "stumble") {
+    const swing = (Math.floor(stageFrames) % 6 < 3) ? 1 : -1;
+    ctx.fillRect(screenX + w * 0.3, screenY + h * 0.15, w * 0.4, h * 0.4);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(screenX + w * 0.3, screenY + h * 0.15, w * 0.4, h * 0.12);
+    ctx.strokeStyle = PAL.ink;
+    ctx.beginPath(); ctx.moveTo(cx, screenY + h * 0.25); ctx.lineTo(cx - w * 0.9 * swing, screenY - h * 0.15); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, screenY + h * 0.25); ctx.lineTo(cx + w * 0.9 * swing, screenY - h * 0.15); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, screenY + h * 0.55); ctx.lineTo(screenX - w * 0.3, screenY + h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, screenY + h * 0.55); ctx.lineTo(screenX + w * 1.3, screenY + h); ctx.stroke();
+    return;
+  }
+
+  if (player.ducking) {
+    ctx.fillRect(screenX, screenY + h * 0.3, w, h * 0.7);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(screenX, screenY + h * 0.3, w, h * 0.16);
+    ctx.strokeStyle = PAL.ink;
+    ctx.beginPath(); ctx.moveTo(screenX, screenY + h * 0.4); ctx.lineTo(screenX - w * 0.6, screenY + h * 0.35); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(screenX + w, screenY + h * 0.4); ctx.lineTo(screenX + w * 1.6, screenY + h * 0.35); ctx.stroke();
+    return;
+  }
+
+  if (!player.onGround) {
+    ctx.fillRect(screenX + w * 0.15, screenY, w * 0.7, h * 0.6);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(screenX + w * 0.15, screenY, w * 0.7, h * 0.14);
+    ctx.strokeStyle = PAL.ink;
+    ctx.beginPath(); ctx.moveTo(screenX + w * 0.3, screenY + h * 0.6); ctx.lineTo(screenX + w * 0.1, screenY + h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(screenX + w * 0.7, screenY + h * 0.6); ctx.lineTo(screenX + w * 0.9, screenY + h * 0.85); ctx.stroke();
+    return;
+  }
+
+  ctx.fillRect(screenX + w * 0.2, screenY, w * 0.6, h * 0.55);
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  ctx.fillRect(screenX + w * 0.2, screenY, w * 0.6, h * 0.12);
+  ctx.strokeStyle = PAL.ink;
+  if (Math.abs(player.vx) < 0.3) {
+    ctx.beginPath(); ctx.moveTo(screenX + w * 0.35, screenY + h * 0.55); ctx.lineTo(screenX + w * 0.35, screenY + h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(screenX + w * 0.65, screenY + h * 0.55); ctx.lineTo(screenX + w * 0.65, screenY + h); ctx.stroke();
+  } else {
+    const legPhase = Math.floor(stageFrames / 4) % 2;
+    if (legPhase === 0) {
+      ctx.beginPath(); ctx.moveTo(screenX + w * 0.35, screenY + h * 0.55); ctx.lineTo(screenX + w * 0.15, screenY + h); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(screenX + w * 0.65, screenY + h * 0.55); ctx.lineTo(screenX + w * 0.85, screenY + h * 0.8); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.moveTo(screenX + w * 0.35, screenY + h * 0.55); ctx.lineTo(screenX + w * 0.15, screenY + h * 0.8); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(screenX + w * 0.65, screenY + h * 0.55); ctx.lineTo(screenX + w * 0.85, screenY + h); ctx.stroke();
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// scene drawing
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, LH);
+  g.addColorStop(0, PAL.sky1); g.addColorStop(0.55, PAL.sky2); g.addColorStop(1, PAL.sky3);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH);
+}
+
+function drawResultsScreen() {
+  const boxX = 60, boxY = 70, boxW = 280, boxH = 110;
+  ctx.fillStyle = 'rgba(253,248,236,0.95)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.2;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  const stageBest = sessionBestFrames[currentStageID];
+
+  boldCText("STAGE CLEAR", boxY + 26, 18);
+  ltext("time " + formatTime(lastClearFrames), boxX + 16, boxY + 48, { font: '13px Georgia' });
+
+  if (stageBest !== undefined && lastClearFrames === stageBest) {
+    ltext("new session best", boxX + 16, boxY + 68, { font: 'bold 13px Georgia', color: '#8a6338' });
+  } else if (stageBest !== undefined) {
+    ltext("best " + formatTime(stageBest), boxX + 16, boxY + 68, { font: '13px Georgia' });
+    ltext(formatDelta(lastClearFrames, stageBest) + " vs best", boxX + 16, boxY + 86, { font: '13px Georgia' });
+  }
+
+  ctext("press ENTER to continue", boxY + 100, { font: '12px Georgia', color: '#6b5030' });
+}
+
+function drawScene() {
+  drawSky();
+
+  const colStart = Math.max(0, Math.floor(camera.x / TILE_SIZE));
+  const colEnd = Math.min(MAP_COLS - 1, Math.floor((camera.x + LW - 1) / TILE_SIZE));
+  const rowStart = Math.max(0, Math.floor(camera.y / TILE_SIZE));
+  const rowEnd = Math.min(MAP_ROWS - 1, Math.floor((camera.y + LH - 1) / TILE_SIZE));
+
+  for (let row = rowStart; row <= rowEnd; row++) {
+    const rowData = tileMap[row];
+    if (!rowData) continue;
+    for (let col = colStart; col <= colEnd; col++) {
+      const t = rowData[col];
+      if (t && t.solid) {
+        const tx = col * TILE_SIZE - camera.x, ty = row * TILE_SIZE - camera.y;
+        if (t.surface === "snow") drawSnowTile(tx, ty);
+        else if (t.surface === "needle") drawNeedleTile(tx, ty, col, row);
+        else if (t.surface === "deck") drawDeckTile(tx, ty);
+        else drawBareTile(tx, ty, col, row);
+        if ((t.looseCobble || t.deckBoard) && t.collapseState === "counting") drawCollapseTelegraph(tx, ty);
+      } else if (t && t.water) {
+        const tx = col * TILE_SIZE - camera.x, ty = row * TILE_SIZE - camera.y;
+        drawWaterTile(tx, ty, stageFrames);
+      }
+      // dropped (solid=false) tiles are deliberately not drawn — passable.
+    }
+  }
+
+  if (currentStageID === 5) drawDredgeSilhouette(70 * TILE_SIZE - camera.x, 9 * TILE_SIZE - camera.y, 0.6);
+  else if (currentStageID === 6) drawDredgeSilhouette(4 * TILE_SIZE - camera.x, 1020 - 30 - camera.y, 1.0);
+
+  const h = playerHeight();
+  drawPlayer(player.x - camera.x, player.y - camera.y, h);
+
+  const borderH = 10, by = LH - borderH;
+  ctx.fillStyle = PAL.rockDk;
+  ctx.fillRect(0, by, LW, borderH);
+  ctx.fillStyle = PAL.rockLt;
+  for (let bx = 6; bx < LW - 6; bx += 14) {
+    const seed = Math.floor(bx / 14) % 3;
+    if (seed === 0) ctx.fillRect(bx, by + 2, 5, 3);
+    else if (seed === 1) ctx.fillRect(bx + 2, by + 4, 4, 3);
+  }
+
+  rtext(formatTime(stageFrames), 392, 14, { font: '13px Georgia' });
+
+  if (gameMode === "STAGECLEAR") drawResultsScreen();
+}
+
+// ---------------------------------------------------------------
+// stage load/select
+function loadStage(id) {
+  currentStageID = id;
+  CAMERA_MODE = STAGE_CAMERA_MODE[id];
+
+  tileMap = [];
+  checkpoints = [];
+  allCollapsibleTiles = [];
+  STAGE_FINISH_X = null; STAGE_FINISH_Y = null;
+
+  if (id === 1) totalRunFrames = 0;
+
+  buildStageMap(id);
+
+  resetStage();
+  camera.x = 0; camera.y = 0; cameraLookahead = 0;
+  gameMode = "PLAY";
+}
+
+function isStageUnlocked(id) { return id === 1 || completedStages[id] === true; }
+
+// ---------------------------------------------------------------
+// Crank-driven scroll, rebuilt for keyboard/wheel — shared by title
+// and ending. On Playdate this is continuous two-way scroll driven
+// directly by crank rotation ("reading is rowing"); here Up/Down/W/S
+// or the mouse wheel drive the same thrust/drag physics instead,
+// same substitution CLAIMJUMPER!'s ending made.
+const PANEL_W = 400;
+const SCROLL_THRUST = 10.0, SCROLL_DRAG = 0.10;
+function updateScroll(sc, numPanels) {
+  let d = 0;
+  if (downHeld()) d += SCROLL_THRUST;
+  if (keys['ArrowUp'] || keys['KeyW']) d -= SCROLL_THRUST;
+  d += wheelDelta; wheelDelta = 0;
+  sc.vel = (sc.vel + d) * (1 - SCROLL_DRAG);
+  sc.pos += sc.vel;
+  sc.angleAccum += Math.abs(sc.vel);
+  const maxScroll = (numPanels - 1) * PANEL_W;
+  if (sc.pos < 0) { sc.pos = 0; sc.vel = 0; }
+  else if (sc.pos > maxScroll) { sc.pos = maxScroll; sc.vel = 0; }
+}
+
+function drawPineSkyline() {
+  const baseY = 150;
+  const heights = [30,55,20,45,60,25,50,35,40,20,55,30,45,25,50];
+  const segW = PANEL_W / heights.length;
+  ctx.strokeStyle = PAL.ink; ctx.fillStyle = PAL.rockDk; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(0, baseY);
+  let prevX = 0, prevY = baseY;
+  for (let i = 0; i < heights.length; i++) {
+    const x = (i + 0.5) * segW, y = baseY - heights[i];
+    ctx.lineTo(x, y);
+    prevX = x; prevY = y;
+  }
+  ctx.lineTo(PANEL_W, baseY);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.beginPath(); ctx.moveTo(0, baseY);
+  for (let i = 0; i < heights.length; i++) ctx.lineTo((i + 0.5) * segW, baseY - heights[i] * 0.94);
+  ctx.lineTo(PANEL_W, baseY); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, baseY); ctx.lineTo(PANEL_W, baseY); ctx.stroke();
+}
+
+function drawRowboat(bx, by, strokePhase) {
+  ctx.strokeStyle = PAL.ink; ctx.fillStyle = PAL.wood; ctx.lineWidth = 1.3;
+  const pts = [[bx-40,by],[bx-35,by-10],[bx-10,by-14],[bx+20,by-14],[bx+38,by-6],[bx+42,by],[bx+20,by+4]];
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(bx-30, by-8); ctx.lineTo(bx+30, by-10); ctx.stroke();
+
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(bx-3, by-25, 6, 6);
+  ctx.strokeStyle = PAL.ink;
+  ctx.beginPath(); ctx.moveTo(bx, by-19); ctx.lineTo(bx, by-8); ctx.stroke();
+
+  const phase = (strokePhase % 1) * Math.PI * 2;
+  const swing = Math.sin(phase) * 25;
+  ctx.strokeStyle = '#5a4326'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(bx-5, by-12); ctx.lineTo(bx-30, by-12-swing); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bx+5, by-12); ctx.lineTo(bx+30, by-12+swing); ctx.stroke();
+}
+
+function drawPanelTextPlate(centerX, lines) {
+  const lineH = 16;
+  const plateH = lines.length * lineH + 14;
+  ctx.font = '13px Georgia';
+  let plateW = 0;
+  for (const l of lines) plateW = Math.max(plateW, ctx.measureText(l).width);
+  plateW += 26;
+
+  const plateX = centerX - plateW / 2, plateY = 100 - plateH / 2;
+  ctx.fillStyle = 'rgba(253,248,236,0.95)';
+  ctx.fillRect(plateX, plateY, plateW, plateH);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.strokeRect(plateX, plateY, plateW, plateH);
+
+  for (let i = 0; i < lines.length; i++) ctextAt(lines[i], centerX, plateY + 8 + (i + 1) * lineH - lineH * 0.3);
+}
+
+// ---------------------------------------------------------------
+// Title sequence — panels ported verbatim from TITLE_PANELS, with
+// the control-hint line adapted from Playdate buttons to keyboard.
+const TITLE_PANELS = [
+  ["TAILINGS! v3.7"],
+  ["Junction Bar, South Fork of the Boise."],
+  ["The dredges took the gold and stacked", "the river back up behind them."],
+  ["The rock is still there."],
+  ["\u2190 run   \u2192 run   SPACE jump   B brace"],
+  ["Press ENTER to start"],
+];
+
+let gameMode = "TITLE"; // TITLE | STAGESELECT | PLAY | STAGECLEAR | ENDING
+const titleScroll = { pos: 0, vel: 0, angleAccum: 0 };
+const endingScroll = { pos: 0, vel: 0, angleAccum: 0 };
+let stageSelectCursor = 1;
+
+function updateTitle() {
+  updateScroll(titleScroll, TITLE_PANELS.length);
+  musicSet(MUS_TITLE);
+
+  // "A skips to gameplay from any panel" — unconditional, not gated on
+  // reaching the last panel. Always starts a fresh run at Stage 1.
+  if (enterPressed) {
+    gameMode = "PLAY";
+    loadStage(1);
+  } else if (bPressed) {
+    gameMode = "STAGESELECT";
+    stageSelectCursor = currentStageID;
+  }
+}
+function drawTitle() {
+  drawSky();
+  drawPineSkyline();
+  const strokePhase = titleScroll.angleAccum / 60;
+  drawRowboat(200, 190, strokePhase);
+  for (let i = 0; i < TITLE_PANELS.length; i++) {
+    const screenX = i * PANEL_W - titleScroll.pos + 200;
+    if (screenX > -PANEL_W / 2 && screenX < PANEL_W * 1.5) drawPanelTextPlate(screenX, TITLE_PANELS[i]);
+  }
+  ltext("B: select stage \u00b7 \u2191\u2193 / wheel: scroll", 8, 232, { font: '10px Georgia', color: '#6b5030' });
+}
+
+// ---------------------------------------------------------------
+// Stage select
+function updateStageSelect() {
+  if (downPressed) { stageSelectCursor = Math.min(6, stageSelectCursor + 1); }
+  else if (upPressed) { stageSelectCursor = Math.max(1, stageSelectCursor - 1); }
+
+  if (enterPressed) {
+    if (isStageUnlocked(stageSelectCursor)) { gameMode = "PLAY"; loadStage(stageSelectCursor); }
+  }
+  if (bPressed) gameMode = "TITLE";
+}
+function drawStageSelect() {
+  drawSky();
+  drawPineSkyline();
+
+  // Backing plate behind the whole list — the pine skyline here is a
+  // solid painted fill (unlike the Lua's plain outline), so lower rows
+  // need guaranteed contrast the same way every other text panel in
+  // this build gets one.
+  ctx.fillStyle = 'rgba(253,248,236,0.93)';
+  ctx.fillRect(24, 36, 352, 190);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.strokeRect(24, 36, 352, 190);
+
+  boldCText("SELECT STAGE", 26, 18);
+
+  const listY = 58, rowH = 27;
+  for (let i = 1; i <= 6; i++) {
+    const y = listY + (i - 1) * rowH;
+    const unlocked = isStageUnlocked(i);
+    let label = i + ". " + STAGE_NAMES[i];
+    if (!unlocked) label += "  \u2014 locked";
+    else if (sessionBestFrames[i] !== undefined) label += "   best " + formatTime(sessionBestFrames[i]);
+
+    ctx.font = '13px Georgia';
+    const w = ctx.measureText(label).width;
+    if (i === stageSelectCursor) {
+      ctx.fillStyle = PAL.gold;
+      ctx.globalAlpha = 0.35;
+      ctx.fillRect(30, y - 13, w + 16, 20);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+      ctx.strokeRect(30, y - 13, w + 16, 20);
+    }
+    ltext(label, 38, y + 1, { font: '13px Georgia', color: unlocked ? '#2b1d10' : '#8a7a68' });
+  }
+
+  ctext("ENTER select   B back", 224, { font: '12px Georgia', color: '#6b5030' });
+}
+
+// ---------------------------------------------------------------
+// Ending sequence — same scroll mechanic as the title, reused
+// wholesale. Panel text pulled from this game's own closing lines
+// in the Lua (drawEndingPanel), not reused from CLAIMJUMPER!'s.
+const NUM_ENDING_PANELS = 7;
+const qrImg = new Image();
+let qrReady = false, qrFailed = false;
+qrImg.onload = () => { qrReady = true; };
+qrImg.onerror = () => { qrFailed = true; };
+qrImg.src = 'tailings-images/qr.png';
+
+function drawEndingPanel(index, screenX) {
+  if (index === 1) drawPanelTextPlate(screenX, ["Final run time: " + formatTime(totalRunFrames)]);
+  else if (index === 2) drawPanelTextPlate(screenX, ["The dredges are gone."]);
+  else if (index === 3) drawPanelTextPlate(screenX, ["The rock they stacked is still stacked."]);
+  else if (index === 4) drawPanelTextPlate(screenX, ["POST TENEBRAS LUX"]);
+  else if (index === 5) drawPanelTextPlate(screenX, ["LUX ESTO UMBRAS FINDENS"]);
+  else if (index === 6) drawPanelTextPlate(screenX, ["TRY. FAIL. LEARN."]);
+  else if (index === 7) {
+    if (qrReady) {
+      const s = 96;
+      ctx.fillStyle = 'rgba(253,248,236,0.95)';
+      ctx.fillRect(screenX - s / 2 - 6, 100 - s / 2 - 6, s + 12, s + 12);
+      ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+      ctx.strokeRect(screenX - s / 2 - 6, 100 - s / 2 - 6, s + 12, s + 12);
+      ctx.drawImage(qrImg, screenX - s / 2, 100 - s / 2, s, s);
+    } else {
+      drawPanelTextPlate(screenX, [qrFailed ? "lux_esto@protonmail.com" : "loading\u2026"]);
+    }
+  }
+}
+
+function updateEnding() {
+  updateScroll(endingScroll, NUM_ENDING_PANELS);
+  musicSet(MUS_ENDING);
+
+  if (enterPressed) {
+    gameMode = "TITLE";
+    titleScroll.pos = 0; titleScroll.vel = 0; titleScroll.angleAccum = 0;
+  }
+}
+function drawEnding() {
+  drawSky();
+  drawPineSkyline();
+  const strokePhase = endingScroll.angleAccum / 60;
+  drawRowboat(200, 190, strokePhase);
+  for (let i = 1; i <= NUM_ENDING_PANELS; i++) {
+    const screenX = (i - 1) * PANEL_W - endingScroll.pos + 200;
+    if (screenX > -PANEL_W / 2 && screenX < PANEL_W * 1.5) drawEndingPanel(i, screenX);
+  }
+  ltext("\u2191\u2193 / wheel: scroll \u00b7 ENTER: back to title", 8, 232, { font: '10px Georgia', color: '#6b5030' });
+}
+
+// ---------------------------------------------------------------
+// main loop — fixed 30Hz logic tick (matches pd.display.setRefreshRate(30)),
+// rendered once per animation frame. Logic (tick) and drawing (render)
+// are kept separate so catching up on a slow frame re-runs game state
+// the right number of times without ever painting more than once.
+function tick() {
+  pollEdges();
+
+  if (gameMode === "TITLE") { updateTitle(); musicTick(); return; }
+  if (gameMode === "STAGESELECT") { updateStageSelect(); return; }
+  if (gameMode === "ENDING") { updateEnding(); musicTick(); return; }
+
+  musicSet(null); // gameplay + results are silent except SFX
+
+  if (gameMode === "PLAY") {
+    updatePlayer();
+    updateCamera();
+    updateCobbles();
+    updateOneWayCollapsibles();
+    stageFrames += 1;
+
+    let finished = true;
+    if (STAGE_FINISH_X !== null) finished = finished && (player.x >= STAGE_FINISH_X);
+    if (STAGE_FINISH_Y !== null) finished = finished && (player.y <= STAGE_FINISH_Y);
+
+    if (finished) {
+      lastClearFrames = stageFrames;
+      totalRunFrames += stageFrames;
+      if (sessionBestFrames[currentStageID] === undefined || stageFrames < sessionBestFrames[currentStageID]) {
+        sessionBestFrames[currentStageID] = stageFrames;
+      }
+      completedStages[currentStageID] = true;
+
+      if (currentStageID === 6) {
+        gameMode = "ENDING";
+        endingScroll.pos = 0; endingScroll.vel = 0; endingScroll.angleAccum = 0;
+      } else {
+        gameMode = "STAGECLEAR";
+        sfxStageClear();
+      }
+    }
+  } else if (gameMode === "STAGECLEAR") {
+    if (enterPressed) loadStage(currentStageID + 1);
+  }
+}
+
+function render() {
+  ctx.save();
+  ctx.setTransform(DRAW_SCALE, 0, 0, DRAW_SCALE, 0, 0);
+  ctx.clearRect(0, 0, LW, LH);
+  if (gameMode === "TITLE") drawTitle();
+  else if (gameMode === "STAGESELECT") drawStageSelect();
+  else if (gameMode === "ENDING") drawEnding();
+  else drawScene(); // PLAY and STAGECLEAR share the same scene + HUD/results overlay
+  ctx.restore();
+}
+
+let lastT = performance.now(), acc = 0;
+const STEP_MS = 1000 / 30;
+function frame(now) {
+  let delta = now - lastT; lastT = now;
+  if (delta > 250) delta = 250;
+  acc += delta;
+  let iter = 0;
+  while (acc >= STEP_MS && iter < 6) { tick(); acc -= STEP_MS; iter++; }
+  render();
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

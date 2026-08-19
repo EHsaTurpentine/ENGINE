@@ -1,0 +1,1995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ALTURAS PETE!</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0e1424;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Georgia', 'Palatino Linotype', serif;
+    overflow: hidden;
+    color: #f2ead8;
+  }
+  #wrap {
+    position: relative;
+    width: 960px; height: 540px;
+    box-shadow: 0 0 0 5px #241a10, 0 0 0 9px #6b4a2a, 0 0 0 10px #8a6338,
+                0 26px 70px rgba(0,0,0,0.7);
+    border-radius: 5px;
+    overflow: hidden;
+    background: #000;
+  }
+  canvas { display: block; image-rendering: auto; position: absolute; top: 0; left: 0; }
+  #hint {
+    position: absolute; bottom: -34px; left: 0; width: 100%;
+    text-align: center; font-size: 12px; color: #9a8f78; letter-spacing: 0.6px;
+  }
+  #hint b { color: #e8b23c; font-weight: 700; }
+  #dbg {
+    position: absolute; top: 4px; left: 6px; font: 10px monospace; color: #6f6;
+    white-space: pre; pointer-events: none; display: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="out" width="960" height="540"></canvas>
+  <div id="dbg"></div>
+</div>
+<div id="hint">&#8592;&#8594; WALK &nbsp;&middot;&nbsp; &#8593;&#8595; LADDERS &nbsp;&middot;&nbsp; <b>SPACE</b> JUMP (pick swings itself, facing-gated) &nbsp;&middot;&nbsp; <b>~</b> DEBUG</div>
+<script>
+"use strict";
+
+/* ============================================================
+   ALTURAS PETE! -- MAILTO! edition
+   A standalone homage to Pick Axe Pete! (Magnavox Odyssey^2,
+   1982, designed by Ed & Linda Averett). Fan work reproducing
+   publicly documented RULES from the original's manual and box
+   copy -- not Magnavox/Philips code, assets, or exact visuals.
+   Not affiliated with Magnavox/Philips.
+
+   This build repaints the original alturas-pete.html in MAILTO!'s
+   hand-drawn painted-vector art style/palette (shaded canvas
+   paths, no image assets, same technique MAILTO! itself uses) in
+   place of the original's flat Odyssey2-style pixel blocks -- the
+   first of the SOUTH FORK SATURDAYS games ported to this shared
+   visual language. Every number in TUNING/GEO/FIELDS and every
+   line of update/collision/scoring logic is byte-for-byte
+   identical to the source file; only the ten draw* functions were
+   rewritten, rendering at DRAW_SCALE (4x) internal resolution for
+   smooth linework instead of nearest-neighbor pixel scaling. The
+   hand-authored dot-matrix score font is deliberately left as-is,
+   scaled but not restyled -- see drawDotMatrixNumber.
+
+   Vanilla JS + Canvas, no dependencies, no build step.
+   Internal logic buffer 240x180; render buffer 960x720 (4x).
+   ============================================================ */
+
+// ---------------------------------------------------------------
+// 1. TUNING -- every adjustable number lives here.
+// ---------------------------------------------------------------
+const TUNING = {
+  bufW: 240, bufH: 180,
+  walkSpeed: 42,        // px/sec (internal px)
+  climbSpeed: 30,       // px/sec
+  gravity: 320,         // px/sec^2
+  jumpApex: 12,          // px
+  jumpDuration: 0.34,    // sec, total time in air (tuned down from 0.52 -- see checkpoint 2 note below)
+  // Horizontal jump speed is deliberately its OWN number, not walkSpeed -- walkSpeed/
+  // jumpDuration are already tuned for boulder evasion (checkpoint 2) and touching them
+  // would shift that feel. At walkSpeed this only carries ~14px over the jump's duration,
+  // not enough to clear the widest gaps -- this gives a jump a reach a player can trust.
+  jumpHorizSpeed: 56,    // px/sec, reach ~19px over jumpDuration -- comfortably past any gap
+  duckDropHoldMs: 250,   // hold down this long with no ladder to drop through
+  petePickBoxStand: [6, 12],
+  petePickBoxDuck: [6, 7],
+
+  // --- checkpoint 2: pick, boulders, doors (Collar/field-0 values; per-field table arrives checkpoint 4) ---
+  // CONTROL MODEL (per single-ACTION-button fidelity, Odyssey2/Atari-2600 style):
+  // ACTION always jumps, full stop -- no exceptions. The pick is NOT an action; it's a
+  // passive hazard that's always "hot" while armed, extending a short reach in whichever
+  // direction Pete is currently facing. Any boulder that touches that zone dies -- no
+  // button involved. Facing (not jump state, not a button press) is what gates the hit.
+  pickStrikesMax: 10,
+  pickTimeMax: 40,        // sec
+  pickWarnStrikes: 3,
+  pickWarnTime: 8,        // sec
+  pickReach: 15,           // px, horizontal extent of the passive pick hazard, in facing dir
+  boulderSpawnMs: 2600,
+  boulderSpeed: 40,       // px/sec, floor 0
+  boulderSpeedGrowth: 1.04, // multiplier per floor descended
+  hopperRatio: 0.10,
+  hopperAmplitude: 12,    // px, height of arc at peak
+  hopperPeriod: 0.9,      // sec, one full bounce cycle
+  evadeDX: 5,             // px, horizontal proximity that counts as "passing"
+  collideDX: 5,           // px, horizontal proximity that counts as body contact
+
+  // --- checkpoint 3: boulder-boulder economy, doors, descent ---
+  // NOTE on key catchability: playtest bots (see balance test) could reliably grab pick
+  // pickups but essentially never a key at the original 24px/s drift / 3.5s life / 9px
+  // catch box -- the geometry gives well under a second of overlap per floor as it blows
+  // through ~4.4 floors in its lifetime, making door progression practically unreachable.
+  // Widened the catch box and extended the life a bit; drift speed and rarity untouched,
+  // so it's still meaningfully harder to grab than a pick, just not effectively impossible.
+  boulderCollideDX: 6,     // px, boulder-boulder proximity that triggers a collision
+  pickupPickChance: 0.30,
+  pickupKeyChance: 0.18,   // remaining probability = nothing drops
+  pickDriftSpeed: 20,      // px/sec, downward
+  pickLifeMs: 5000,
+  keyDriftSpeed: 24,       // px/sec, upward -- and shorter-lived, per the original manual
+  keyLifeMs: 4500,         // was 3500
+  pickupCollectDX: 6,
+  pickupCollectDY: 14,     // was 9
+  doorTouchDX: 6,
+  doorStuckMs: 1400,
+  doorEjectPx: 20,
+  transitionSec: 1.2,
+
+  // --- checkpoint 5: modes, shell ---
+  pickOffSec: 180,          // PICK-OFF: fixed-length score attack
+  pickOffPenaltySec: 10,    // death costs time and restarts on the current field, run continues
+  shiftMinPlayers: 2, shiftMaxPlayers: 4,
+  idleAttractSec: 15,       // title -> attract after this long untouched
+  deathFreezeSec: 1.5,
+  highScoreSlots: 8,
+};
+
+// ---------------------------------------------------------------
+// 2. PLAYFIELD GEOMETRY (internal coordinates)
+// ---------------------------------------------------------------
+const GEO = {
+  statusH: 18,
+  wallL: 8, wallR: 231,
+  floorY: [42, 61, 80, 99, 118, 137, 156], // 7 floors, top to bottom
+  floorThick: 3,
+  ladderX: [32, 68, 104, 140, 176, 208],   // 6 ladder columns
+  doorX: [52, 120, 188],                    // 3 doors, top floor only
+};
+const FLOORS = GEO.floorY.length;
+
+// ---------------------------------------------------------------
+// 3. PALETTES -- four colours + black, per field, in depth order.
+// ---------------------------------------------------------------
+// Ten real historical mines from the Rocky Bar (South Boise) and Atlanta mining
+// districts -- Elmore County, Idaho -- replacing the original depth-ladder naming
+// per request. Sourced from the South Boise Historic Mining District research:
+// Ida Elmore, Confederate Star, Pittsburg, and Esmeralda (Rocky Bar itself was
+// renamed Esmeralda for a time) from the Rocky Bar side; Buffalo, Monarch, General
+// Pettit, Last Chance, and Tahoma from the Atlanta side, 23 miles northeast up the
+// same toll road MAILTO!'s carriers walked. Order is thematic, not historical depth --
+// these are ten distinct mines, not ten levels of one mine.
+const PALETTES = [
+  { name: "IDA ELMORE",       wall: "#8a6338", floor: "#d6241c", boulder: "#c94f3c", pete: "#e8b23c", accent: "#5fb46a" },
+  { name: "CONFEDERATE STAR", wall: "#6b5a8a", floor: "#3c8a8a", boulder: "#c94f8a", pete: "#e8b23c", accent: "#5fa0b4" },
+  { name: "PITTSBURG",        wall: "#3d6b4a", floor: "#2c6b4a", boulder: "#d67d2c", pete: "#f2ea6a", accent: "#4ec9a0" },
+  { name: "ESMERALDA",        wall: "#5a4a6b", floor: "#4a3c8a", boulder: "#c94f3c", pete: "#e8b23c", accent: "#8a7fd6" },
+  { name: "GOLDEN EAGLE",     wall: "#6b4a2a", floor: "#a06a1c", boulder: "#8a3c2c", pete: "#d6a24e", accent: "#a06a3c" },
+  { name: "BUFFALO",          wall: "#4a5a6b", floor: "#5a6b7a", boulder: "#b45f5f", pete: "#e0d8b0", accent: "#7fa0b4" },
+  { name: "MONARCH",          wall: "#6b2a3c", floor: "#8a1c3c", boulder: "#e04f4f", pete: "#f2c96a", accent: "#c94f8a" },
+  { name: "GENERAL PETTIT",   wall: "#2a2a3c", floor: "#3c3c5a", boulder: "#c94f3c", pete: "#e8d8a0", accent: "#4a4a6b" },
+  { name: "LAST CHANCE",      wall: "#6b3c2a", floor: "#7a3c1c", boulder: "#d62c2c", pete: "#f2b23c", accent: "#8a4f2c" },
+  { name: "TAHOMA",           wall: "#2c4a6b", floor: "#1c4a6b", boulder: "#4fa0c9", pete: "#e8e0a0", accent: "#3c7f9c" },
+];
+
+// Universal, vivid, tied to no field's shifting palette -- the pick always reads the
+// same "this is your tool" color no matter which of the ten fields you're standing in.
+const PICK_COLOR = "#a855f7";
+
+// Lightens (positive percent) or darkens (negative) a '#rrggbb' color -- used to bevel
+// the floor bars (highlight/shadow) without hand-picking three shades per field.
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.slice(1), 16);
+  let r = (num >> 16) & 0xff, g = (num >> 8) & 0xff, b = num & 0xff;
+  const t = percent < 0 ? 0 : 255;
+  const p = Math.abs(percent) / 100;
+  r = Math.round((t - r) * p) + r;
+  g = Math.round((t - g) * p) + g;
+  b = Math.round((t - b) * p) + b;
+  return '#' + (0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1);
+}
+
+// ---------------------------------------------------------------
+// 3a-2. DOT-MATRIX DIGIT FONT -- a hand-authored 5x7 bitmap font, drawn as filled
+// blocks rather than any system font. This is deliberate: no smooth vector typeface
+// reads as period-correct at any size or scale, since 8-bit-era hardware built its
+// characters from a coarse pixel grid, not a font renderer. Used for the score, which
+// the original displayed large, at the bottom of the screen, with no "SCORE" label --
+// current-game score at lower right, per the original manual.
+// ---------------------------------------------------------------
+const DIGIT_FONT = {
+  '0': ["01110","10001","10011","10101","11001","10001","01110"],
+  '1': ["00100","01100","00100","00100","00100","00100","01110"],
+  '2': ["01110","10001","00001","00010","00100","01000","11111"],
+  '3': ["11111","00010","00100","00010","00001","10001","01110"],
+  '4': ["00010","00110","01010","10010","11111","00010","00010"],
+  '5': ["11111","10000","11110","00001","00001","10001","01110"],
+  '6': ["00110","01000","10000","11110","10001","10001","01110"],
+  '7': ["11111","00001","00010","00100","01000","01000","01000"],
+  '8': ["01110","10001","10001","01110","10001","10001","01110"],
+  '9': ["01110","10001","10001","01111","00001","00010","01100"],
+};
+
+// Draws text (digits only) right-aligned against rightX, top edge at topY, using the
+// blocky dot-matrix font above at dotSize px per "pixel" of the 5x7 grid.
+function drawDotMatrixNumber(text, rightX, topY, dotSize, color) {
+  const pitch = 6 * dotSize; // 5 cols + 1 col of inter-digit spacing
+  let x = rightX - text.length * pitch;
+  bctx.fillStyle = color;
+  for (const ch of text) {
+    const pattern = DIGIT_FONT[ch];
+    if (pattern) {
+      for (let row = 0; row < 7; row++) {
+        for (let col = 0; col < 5; col++) {
+          if (pattern[row][col] === '1') {
+            bctx.fillRect(x + col * dotSize, topY + row * dotSize, dotSize, dotSize);
+          }
+        }
+      }
+    }
+    x += pitch;
+  }
+}
+
+// ---------------------------------------------------------------
+// 3b. FIELDS -- one tuning entry per depth, same order as PALETTES.
+//     Every modifier from the GDD's depth table lives here. Numbers
+//     match the tuning table (Collar..900 Level); modifier flags
+//     (gates/dust/carbideOut/water/doubleBurst) gate the extra
+//     behavior each field adds on top of the base loop.
+// ---------------------------------------------------------------
+const FIELDS = [
+  { spawnMs: 2600, boulderSpeed: 40, hopperRatio: 0.10, ladderLifeMs: 9000, ladderSpawnMs: 1600, maxLadders: 5 },
+  { spawnMs: 2300, boulderSpeed: 43, hopperRatio: 0.15, ladderLifeMs: 8500, ladderSpawnMs: 1700, maxLadders: 5 },
+  { spawnMs: 2100, boulderSpeed: 45, hopperRatio: 0.40, ladderLifeMs: 8000, ladderSpawnMs: 1800, maxLadders: 4 },
+  { spawnMs: 2000, boulderSpeed: 47, hopperRatio: 0.40, ladderLifeMs: 8000, ladderSpawnMs: 1800, maxLadders: 4, gates: 2 },
+  { spawnMs: 1900, boulderSpeed: 49, hopperRatio: 0.40, ladderLifeMs: 5200, ladderSpawnMs: 2000, maxLadders: 4 },
+  { spawnMs: 1800, boulderSpeed: 51, hopperRatio: 0.45, ladderLifeMs: 7500, ladderSpawnMs: 1900, maxLadders: 4, dust: true },
+  { spawnMs: 1750, boulderSpeed: 52, hopperRatio: 0.45, ladderLifeMs: 7500, ladderSpawnMs: 1900, maxLadders: 4, doubleBurst: true },
+  { spawnMs: 1700, boulderSpeed: 53, hopperRatio: 0.45, ladderLifeMs: 8000, ladderSpawnMs: 1800, maxLadders: 5, carbideOut: true },
+  { spawnMs: 1550, boulderSpeed: 57, hopperRatio: 0.50, ladderLifeMs: 7000, ladderSpawnMs: 2000, maxLadders: 4, gates: 3 },
+  { spawnMs: 1450, boulderSpeed: 59, hopperRatio: 0.50, ladderLifeMs: 7000, ladderSpawnMs: 2000, maxLadders: 4, water: true },
+];
+
+// index into FIELDS/PALETTES for the current depth, wrapping after all ten (endless loop)
+function fieldIndex() { return game.depth % FIELDS.length; }
+function circuitNum() { return Math.floor(game.depth / FIELDS.length); }
+function currentField() { return FIELDS[fieldIndex()]; }
+function currentPalette() { return PALETTES[fieldIndex()]; }
+// per-circuit difficulty creep once the player has looped past all ten fields
+function circuitSpeedMul() { return Math.pow(1.08, circuitNum()); }
+function circuitSpawnMul() { return Math.pow(0.92, circuitNum()); }
+
+// ---------------------------------------------------------------
+// 4. INPUT
+// ---------------------------------------------------------------
+const keys = {};
+const prevKeys = {}; // snapshot from the previous rendered frame, for menu edge-detection
+let debugOn = false;
+let anyKeyThisFrame = false; // used by ATTRACT to detect "any key -> TITLE"
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  anyKeyThisFrame = true;
+  ensureAudio(); // create/resume on the very first real gesture, inside the actual event
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Backquote') { debugOn = !debugOn; document.getElementById('dbg').style.display = debugOn ? 'block' : 'none'; }
+  if (e.code === 'KeyM') { musicMuted = !musicMuted; if (musicMuted) stopMusic(); else startMusic(); }
+  if (e.code === 'KeyN') { sfxMuted = !sfxMuted; }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function pressed(...codes){ return codes.some(c => keys[c]); }
+function justPressed(...codes){ return codes.some(c => keys[c] && !prevKeys[c]); }
+function snapshotKeyEdges() {
+  for (const c of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter','Space']) prevKeys[c] = !!keys[c];
+}
+
+// ---------------------------------------------------------------
+// 5. SEEDED RNG (mulberry32) -- used later for attract mode/spawns.
+//    Present now so downstream checkpoints don't need to touch this section.
+// ---------------------------------------------------------------
+function mulberry32(seed) {
+  return function() {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let rng = mulberry32(Date.now() & 0xffffffff);
+function rand(a, b) { return a + rng() * (b - a); }
+function randInt(a, b) { return Math.floor(rand(a, b + 1)); }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// ---------------------------------------------------------------
+// 6. ENTITIES -- ladders (real spawn/decay) + Pete
+// ---------------------------------------------------------------
+
+// Ladders appear at random gap/column slots, live for field.ladderLifeMs, flash a
+// warning for their last 1.2s, and hold (not vanish) if Pete is riding one when its
+// time is up -- it disappears the instant he steps off. Spawn rate and life vary by
+// field (rotten timber at 400 Level decays much faster, per the GDD).
+let ladders = []; // { gapIdx, x, age (sec), life (sec) }
+let ladderSpawnT = 1.6;
+
+function pickLadderSlot() {
+  for (let tries = 0; tries < 10; tries++) {
+    const gapIdx = randInt(0, FLOORS - 2);
+    const x = GEO.ladderX[randInt(0, GEO.ladderX.length - 1)];
+    const dup = ladders.some(l => l.gapIdx === gapIdx && Math.abs(l.x - x) < 8);
+    if (!dup) return { gapIdx, x };
+  }
+  return null;
+}
+
+function spawnLadder() {
+  const slot = pickLadderSlot();
+  if (!slot) return;
+  ladders.push({ gapIdx: slot.gapIdx, x: slot.x, age: 0, life: currentField().ladderLifeMs / 1000 });
+}
+
+function seedLadders() {
+  ladders = [];
+  const count = Math.min(currentField().maxLadders, FLOORS - 1);
+  for (let i = 0; i < count; i++) spawnLadder();
+  ladderSpawnT = currentField().ladderSpawnMs / 1000;
+}
+
+function peteOnLadder(l) {
+  return pete.state === 'CLIMB' && pete.climbGap === l.gapIdx && Math.abs(pete.x - l.x) < 1;
+}
+
+function updateLadders(dt) {
+  for (const l of ladders) l.age += dt;
+  ladders = ladders.filter(l => l.age < l.life || peteOnLadder(l));
+
+  const field = currentField();
+  ladderSpawnT -= dt;
+  if (ladderSpawnT <= 0) {
+    if (ladders.length < field.maxLadders) spawnLadder();
+    ladderSpawnT = field.ladderSpawnMs / 1000;
+  }
+}
+
+function ladderNear(x, gapIdx) {
+  for (const l of ladders) if (l.gapIdx === gapIdx && Math.abs(l.x - x) < 5) return l;
+  return null;
+}
+
+// ---------------------------------------------------------------
+// 6b. FLOOR GAPS -- generated once per page load (not per run/restart),
+// so a session's layout stays learnable within itself but a fresh
+// load gives a different mine. The top (door) floor and the bottom
+// floor stay solid -- gaps only cut into the five interior floors.
+//
+// A boulder that rolls into a gap falls through to the floor below
+// WITHOUT reversing direction (it fell, it didn't hit anything) --
+// this is what breaks up the predictable wall-to-wall zigzag and
+// makes boulder paths genuinely different floor to floor. Pete falls
+// through the same way if he's grounded (walking or ducking) over
+// one; jumping clears it, same as jumping clears a wall-adjacent gap
+// would. Falling is unharmed either way, consistent with the original
+// ("Pete falls down platforms unharmed").
+//
+// Gap width is capped below TUNING.jumpHorizSpeed's reach (~19px, see
+// TUNING) with real margin, so a jump reliably clears one -- a gap
+// you can't trust your jump to clear isn't an obstacle, it's a trap.
+// ---------------------------------------------------------------
+const floorGaps = []; // index by floorIdx -> {x0,x1} or null
+(function generateFloorGaps() {
+  for (let i = 0; i < FLOORS; i++) {
+    if (i === 0 || i === FLOORS - 1) { floorGaps.push(null); continue; }
+    const w = rand(9, 14);
+    const x0 = rand(GEO.wallL + 20, GEO.wallR - 20 - w);
+    floorGaps.push({ x0, x1: x0 + w });
+  }
+})();
+function inGap(floorIdx, x) {
+  const g = floorGaps[floorIdx];
+  return !!g && x > g.x0 && x < g.x1;
+}
+
+const pete = {
+  x: 120, y: GEO.floorY[3],
+  floorIdx: 3,
+  facing: 1,
+  state: 'WALK',       // WALK | CLIMB | JUMP | DUCK
+  climbGap: -1,         // which gap index we're climbing, if CLIMB
+  jumpT: 0,              // seconds elapsed into current jump
+  jumpDir: 0,
+  duckHoldMs: 0,
+  animT: 0,
+  swingFlashT: 0,   // cosmetic-only: brief pick glow the instant it kills something
+  stuckT: 0,         // DOORSTUCK countdown
+  stuckDoorX: 0,     // which door we're stuck at, for ejection direction
+  gateCooldown: 0,   // debounces repeated chute-gate shoves
+};
+
+function peteFootY() { return GEO.floorY[pete.floorIdx]; }
+
+// 900 Level: the bottom two floors are flooded -- movement 30% slower, jumps 40% lower.
+function wetAtFloor(f) { return !!currentField().water && f >= FLOORS - 2; }
+function peteWet() { return wetAtFloor(pete.floorIdx); }
+
+function peteHop() {
+  const apex = TUNING.jumpApex * (peteWet() ? 0.6 : 1);
+  return pete.state === 'JUMP'
+    ? apex * Math.sin(clamp(pete.jumpT / TUNING.jumpDuration, 0, 1) * Math.PI)
+    : 0;
+}
+function peteVisualY() { return pete.y - peteHop(); }
+
+// ---------------------------------------------------------------
+// 6b. GAME STATE, PICK, BOULDERS, PICKUPS, DOORS, SCORE, FLOATERS
+// ---------------------------------------------------------------
+const game = { state: 'PLAY', score: 0, depth: 0, keyHeld: false, transitionT: 0 }; // PLAY | DEAD
+const pick = { armed: true, strikes: TUNING.pickStrikesMax, timeLeft: TUNING.pickTimeMax, warned: false };
+let boulders = [];       // { x, floorIdx, dir, type, speed, age, evaded, dead }
+let pickups = [];        // { x, y, kind: 'PICK'|'KEY', age, dead }
+let floaters = [];       // { x, y, text, color, life }
+let gates = [];           // { floorIdx, x } -- chute gates, only on fields with `gates` set
+let simTime = 0;          // monotonic sim clock (sec), advanced once per tick -- gate phase keys off this
+let doorSpawnT = FIELDS[0].spawnMs / 1000; // countdown, sec
+
+function spawnFloat(x, y, text, color) {
+  floaters.push({ x, y, text, color, life: 0.6 });
+}
+
+function resetPick() {
+  pick.armed = true;
+  pick.strikes = TUNING.pickStrikesMax;
+  pick.timeLeft = TUNING.pickTimeMax;
+  pick.warned = false;
+}
+
+function seedGates() {
+  gates = [];
+  const n = currentField().gates || 0;
+  const usableFloors = FLOORS - 2; // skip the top floor (doors) and bottom floor
+  for (let i = 0; i < n; i++) {
+    const floorIdx = 1 + (i % usableFloors);
+    const x = 60 + ((i * 55) % 150);
+    gates.push({ floorIdx, x });
+  }
+}
+
+const GATE_PERIOD = 1.6; // sec, full cycle
+function gateIsHorizontal(g) {
+  const phase = (simTime % GATE_PERIOD) / GATE_PERIOD;
+  return phase > 0.4 && phase < 0.6; // brief active window each cycle
+}
+
+function updateGates() {
+  if (gates.length === 0) return;
+  for (const g of gates) {
+    if (!gateIsHorizontal(g)) continue;
+    for (const b of boulders) {
+      if (b.dead || b.floorIdx !== g.floorIdx) continue;
+      if (Math.abs(b.x - g.x) < 5 && b.gateCooldown <= 0) {
+        b.dir *= -1; // reverses without descending -- breaks the zigzag
+        b.gateCooldown = GATE_PERIOD * 0.5;
+      }
+    }
+    if (pete.floorIdx === g.floorIdx && pete.state !== 'CLIMB' && Math.abs(pete.x - g.x) < 6 && pete.gateCooldown <= 0) {
+      const dir = pete.x >= g.x ? 1 : -1;
+      pete.x = clamp(pete.x + dir * 16, GEO.wallL + 4, GEO.wallR - 4);
+      pete.gateCooldown = GATE_PERIOD * 0.5;
+    }
+  }
+}
+
+function spawnBoulder() {
+  const field = currentField();
+  const doorX = GEO.doorX[randInt(0, GEO.doorX.length - 1)];
+  const dir = rng() < 0.5 ? -1 : 1;
+  const type = rng() < field.hopperRatio ? 'HOPPER' : 'ROLLER';
+  boulders.push({
+    x: doorX, floorIdx: 0, dir, type,
+    speed: field.boulderSpeed * circuitSpeedMul(), age: 0, evaded: false, dead: false,
+    gateCooldown: 0,
+  });
+  sfx('boulderSpawn');
+}
+
+// Vertical occupied band, expressed as [loHeight, hiHeight] above the floor line (0 = floor).
+function peteBand() {
+  if (pete.state === 'CLIMB') return null; // no body collision while on a ladder
+  if (pete.state === 'JUMP') {
+    const hop = peteHop();
+    return [hop, hop + TUNING.petePickBoxStand[1]];
+  }
+  if (pete.state === 'DUCK') return [0, TUNING.petePickBoxDuck[1]];
+  return [0, TUNING.petePickBoxStand[1]];
+}
+
+function boulderBand(b) {
+  if (b.type === 'ROLLER') return [0, 5];
+  const offset = TUNING.hopperAmplitude * Math.abs(Math.sin((2 * Math.PI * b.age) / TUNING.hopperPeriod));
+  return [Math.max(0, offset - 3), offset + 3];
+}
+
+function bandsOverlap(a, b) {
+  return a[0] < b[1] && b[0] < a[1];
+}
+
+// The pick is NOT an action -- it's a passive hazard extending TUNING.pickReach in
+// whichever direction Pete currently faces, active on every tick he's armed and not
+// on a ladder. Any boulder that overlaps that zone dies. Facing is the only gate:
+// a boulder behind Pete, or off to the side he isn't facing, is untouched by it.
+function updatePickHits() {
+  if (!pick.armed || pete.state === 'CLIMB') return;
+  for (const b of boulders) {
+    if (b.dead || b.floorIdx !== pete.floorIdx) continue;
+    const dx = b.x - pete.x;
+    if (Math.abs(dx) > TUNING.pickReach) continue;
+    const facingIt = pete.facing > 0 ? dx >= -1 : dx <= 1; // small overlap allowance at dx~0
+    if (!facingIt) continue;
+
+    b.dead = true;
+    game.score += 3;
+    spawnFloat(b.x, GEO.floorY[b.floorIdx] - 10, '+3', currentPalette().boulder);
+    sfx('pickStrike');
+    pick.strikes -= 1;
+    if (pick.strikes <= 0) { pick.armed = false; sfx('pickShatter'); }
+    pete.swingFlashT = 0.12; // cosmetic only
+  }
+}
+
+function updateBoulders(dt) {
+  for (const b of boulders) {
+    b.age += dt;
+    b.gateCooldown = Math.max(0, b.gateCooldown - dt);
+    b.x += b.dir * b.speed * dt;
+    if (inGap(b.floorIdx, b.x)) {
+      // fell through -- keeps x and dir, just drops a floor. No wall was hit.
+      spawnFloat(b.x, GEO.floorY[b.floorIdx] - 4, '\u2193', currentPalette().accent);
+      b.floorIdx++; b.speed *= TUNING.boulderSpeedGrowth; b.age = 0;
+    } else if (b.x <= GEO.wallL + 3) {
+      b.x = GEO.wallL + 3; b.dir = 1;
+      spawnFloat(b.x, GEO.floorY[b.floorIdx] - 6, '\u2716', currentPalette().wall); // impact mark -- makes the reversal readable
+      sfx('wallHit');
+      b.floorIdx++; b.speed *= TUNING.boulderSpeedGrowth; b.age = 0;
+    } else if (b.x >= GEO.wallR - 3) {
+      b.x = GEO.wallR - 3; b.dir = -1;
+      spawnFloat(b.x, GEO.floorY[b.floorIdx] - 6, '\u2716', currentPalette().wall);
+      sfx('wallHit');
+      b.floorIdx++; b.speed *= TUNING.boulderSpeedGrowth; b.age = 0;
+    }
+    if (b.floorIdx >= FLOORS) b.dead = true; // exited at the bottom, despawn
+  }
+  boulders = boulders.filter(b => !b.dead);
+}
+
+// Boulder-boulder collision -- the ONLY source of pickups, per the original manual.
+// Both boulders die; the wreckage rolls the drop table once.
+function updateBoulderCollisions() {
+  for (let i = 0; i < boulders.length; i++) {
+    const a = boulders[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < boulders.length; j++) {
+      const b = boulders[j];
+      if (b.dead || b.floorIdx !== a.floorIdx) continue;
+      if (Math.abs(a.x - b.x) >= TUNING.boulderCollideDX) continue;
+
+      a.dead = true; b.dead = true;
+      const cx = (a.x + b.x) / 2, cFloor = a.floorIdx;
+      sfx('boulderCollide');
+      const roll = rng();
+      if (roll < TUNING.pickupPickChance) {
+        pickups.push({ x: cx, y: GEO.floorY[cFloor], kind: 'PICK', age: 0, dead: false });
+        sfx('pickSpawn');
+      } else if (roll < TUNING.pickupPickChance + TUNING.pickupKeyChance) {
+        pickups.push({ x: cx, y: GEO.floorY[cFloor], kind: 'KEY', age: 0, dead: false });
+        sfx('keySpawn');
+      }
+      // else: nothing drops -- scarcity is the point, per the GDD
+    }
+  }
+  boulders = boulders.filter(b => !b.dead);
+}
+
+function checkCollisions() {
+  const pBand = peteBand();
+  if (!pBand) return; // climbing -- safe
+  for (const b of boulders) {
+    if (b.floorIdx !== pete.floorIdx) continue;
+    const dx = Math.abs(b.x - pete.x);
+
+    // evade scoring: award once, the first frame a boulder passes within range without contact
+    if (!b.evaded && dx < TUNING.evadeDX) {
+      const bBand = boulderBand(b);
+      if (!bandsOverlap(pBand, bBand)) {
+        b.evaded = true;
+        game.score += 1;
+        spawnFloat(pete.x, GEO.floorY[pete.floorIdx] - 14, '+1', currentPalette().pete);
+      }
+    }
+
+    if (dx < TUNING.collideDX) {
+      const bBand = boulderBand(b);
+      if (bandsOverlap(pBand, bBand) && game.state !== 'DEAD') {
+        game.state = 'DEAD';
+        pete.state = 'WALK';
+        deathFreezeT = TUNING.deathFreezeSec;
+        sfx('death');
+      }
+    }
+  }
+}
+
+// Pick drifts DOWN, key drifts UP -- the same collision event pulls the player in two
+// directions. The key decays much faster, per the original manual, which is what makes
+// it feel earned. Collecting a pick fully re-arms (fresh strikes + fresh timer).
+function updatePickups(dt) {
+  for (const p of pickups) {
+    p.age += dt;
+    p.y += (p.kind === 'PICK' ? TUNING.pickDriftSpeed : -TUNING.keyDriftSpeed) * dt;
+  }
+
+  const pvy = peteVisualY();
+  for (const p of pickups) {
+    if (p.dead) continue;
+    if (Math.abs(p.x - pete.x) < TUNING.pickupCollectDX && Math.abs(p.y - pvy) < TUNING.pickupCollectDY) {
+      p.dead = true;
+      if (p.kind === 'PICK') {
+        resetPick();
+        game.score += 5;
+        spawnFloat(p.x, p.y - 6, '+5', currentPalette().accent);
+        sfx('pickup');
+      } else {
+        game.keyHeld = true;
+        game.score += 10;
+        spawnFloat(p.x, p.y - 6, '+10', currentPalette().accent);
+        sfx('keyPickup');
+      }
+    }
+  }
+
+  pickups = pickups.filter(p => {
+    if (p.dead) return false;
+    if (p.y < GEO.statusH - 4 || p.y > TUNING.bufH + 4) return false;
+    const lifeSec = (p.kind === 'PICK' ? TUNING.pickLifeMs : TUNING.keyLifeMs) / 1000;
+    return p.age <= lifeSec;
+  });
+}
+
+// Doors: only reachable on the top floor. A held key spends itself for +20 and a descent;
+// no key means DOORSTUCK -- immobile and vulnerable until ejected to whichever side has
+// more room. Boulders still spawn from (and can still kill through) an occupied door.
+// JUMP is excluded same as CLIMB: leaping over a door's position shouldn't count as
+// walking into it -- consistent with how boulder collisions already respect jump height.
+function checkDoorTouch() {
+  if (pete.floorIdx !== 0 || pete.state === 'CLIMB' || pete.state === 'DOORSTUCK' || pete.state === 'JUMP') return;
+  for (const dx of GEO.doorX) {
+    if (Math.abs(pete.x - dx) >= TUNING.doorTouchDX) continue;
+    if (game.keyHeld) {
+      game.keyHeld = false;
+      game.score += 20;
+      spawnFloat(pete.x, GEO.floorY[0] - 16, '+20', currentPalette().accent);
+      sfx('doorUnlock');
+      triggerDescent(dx);
+    } else {
+      pete.state = 'DOORSTUCK';
+      pete.stuckT = TUNING.doorStuckMs / 1000;
+      pete.stuckDoorX = dx;
+      sfx('doorStuck');
+    }
+    return; // one door interaction per tick
+  }
+}
+
+function triggerDescent(doorX) {
+  game.depth += 1;
+  game.transitionT = TUNING.transitionSec;
+  boulders = [];
+  pickups = [];
+  seedLadders();
+  seedGates();
+  doorSpawnT = currentField().spawnMs / 1000;
+  // clear of the door threshold when the transition ends, same ejection logic as DOORSTUCK
+  const roomLeft = doorX - GEO.wallL, roomRight = GEO.wallR - doorX;
+  const dir = roomRight > roomLeft ? 1 : -1;
+  pete.x = clamp(doorX + dir * TUNING.doorEjectPx, GEO.wallL + 4, GEO.wallR - 4);
+}
+
+function updatePick(dt) {
+  if (!pick.armed) return;
+  pick.timeLeft -= dt;
+  const warn = pick.strikes <= TUNING.pickWarnStrikes || pick.timeLeft <= TUNING.pickWarnTime;
+  if (warn && !pick.warned) { sfx('pickWarn'); pick.warned = true; }
+  if (!warn) pick.warned = false;
+  if (pick.timeLeft <= 0) { pick.armed = false; sfx('pickShatter'); }
+}
+
+function updateFloaters(dt) {
+  for (const f of floaters) { f.y -= 10 * dt; f.life -= dt; }
+  floaters = floaters.filter(f => f.life > 0);
+}
+
+function updateDoorSpawn(dt) {
+  const field = currentField();
+  doorSpawnT -= dt;
+  if (doorSpawnT <= 0) {
+    spawnBoulder();
+    if (field.doubleBurst) spawnBoulder(); // 600 Level: doors fire two boulders in quick succession
+    doorSpawnT = (field.spawnMs / 1000) * circuitSpawnMul();
+  }
+}
+
+function resetGame() {
+  game.state = 'PLAY';
+  game.score = 0;
+  game.depth = 0;
+  game.keyHeld = false;
+  game.transitionT = 0;
+  boulders = [];
+  pickups = [];
+  floaters = [];
+  seedLadders();
+  seedGates();
+  doorSpawnT = currentField().spawnMs / 1000;
+  resetPick();
+  pete.x = 120; pete.y = GEO.floorY[3]; pete.floorIdx = 3; pete.facing = 1;
+  pete.state = 'WALK'; pete.climbGap = -1; pete.jumpT = 0; pete.jumpDir = 0;
+  pete.duckHoldMs = 0; pete.swingFlashT = 0; pete.stuckT = 0; pete.stuckDoorX = 0; pete.gateCooldown = 0;
+}
+
+function updatePete(dt) {
+  const left = pressed('ArrowLeft', 'KeyA');
+  const right = pressed('ArrowRight', 'KeyD');
+  const up = pressed('ArrowUp', 'KeyW');
+  const down = pressed('ArrowDown', 'KeyS');
+
+  pete.animT += dt;
+  pete.swingFlashT = Math.max(0, pete.swingFlashT - dt);
+  pete.gateCooldown = Math.max(0, pete.gateCooldown - dt);
+
+  if (pete.state === 'DOORSTUCK') {
+    pete.stuckT -= dt;
+    if (pete.stuckT <= 0) {
+      const roomLeft = pete.stuckDoorX - GEO.wallL, roomRight = GEO.wallR - pete.stuckDoorX;
+      const dir = roomRight > roomLeft ? 1 : -1;
+      pete.x = clamp(pete.stuckDoorX + dir * TUNING.doorEjectPx, GEO.wallL + 4, GEO.wallR - 4);
+      pete.state = 'WALK';
+    }
+    return; // immobile the whole time -- vulnerable to boulders and doesn't evade
+  }
+
+  if (pete.state === 'JUMP') {
+    const jSpd = TUNING.jumpHorizSpeed * (peteWet() ? 0.7 : 1);
+    pete.jumpT += dt;
+    pete.x += pete.jumpDir * jSpd * dt;
+    pete.x = clamp(pete.x, GEO.wallL + 4, GEO.wallR - 4);
+    if (pete.jumpT >= TUNING.jumpDuration) {
+      pete.state = 'WALK';
+      pete.jumpT = 0;
+    }
+    return;
+  }
+
+  if (pete.state === 'CLIMB') {
+    const l = ladders.find(ll => ll.gapIdx === pete.climbGap);
+    if (!l) { pete.state = 'WALK'; return; } // ladder vanished under us
+    const wet = wetAtFloor(pete.climbGap) || wetAtFloor(pete.climbGap + 1);
+    const cSpd = TUNING.climbSpeed * (wet ? 0.7 : 1);
+    pete.x = l.x;
+    if (up && pete.climbGap - 0 >= 0) {
+      pete.y -= cSpd * dt;
+      const targetY = GEO.floorY[pete.climbGap];
+      if (pete.y <= targetY) {
+        pete.y = targetY;
+        pete.floorIdx = pete.climbGap;
+        pete.state = 'WALK';
+      }
+    } else if (down) {
+      pete.y += cSpd * dt;
+      const targetY = GEO.floorY[pete.climbGap + 1];
+      if (pete.y >= targetY) {
+        pete.y = targetY;
+        pete.floorIdx = pete.climbGap + 1;
+        pete.state = 'WALK';
+      }
+    }
+    return;
+  }
+
+  // WALK / DUCK (grounded states)
+  if (down && !up) {
+    if (pete.state !== 'DUCK') sfx('duck');
+    pete.duckHoldMs += dt * 1000;
+    pete.state = 'DUCK';
+  } else {
+    pete.duckHoldMs = 0;
+    if (pete.state === 'DUCK') pete.state = 'WALK';
+  }
+
+  if (pete.state !== 'DUCK') {
+    const wSpd = TUNING.walkSpeed * (peteWet() ? 0.7 : 1);
+    if (left) { pete.x -= wSpd * dt; pete.facing = -1; }
+    if (right) { pete.x += wSpd * dt; pete.facing = 1; }
+    pete.x = clamp(pete.x, GEO.wallL + 4, GEO.wallR - 4);
+  }
+
+  // Ladder engagement
+  if (up && pete.floorIdx > 0) {
+    const l = ladderNear(pete.x, pete.floorIdx - 1);
+    if (l) { pete.state = 'CLIMB'; pete.climbGap = pete.floorIdx - 1; pete.x = l.x; sfx('ladderStep'); return; }
+  }
+  if (down && pete.floorIdx < FLOORS - 1) {
+    const l = ladderNear(pete.x, pete.floorIdx);
+    if (l) { pete.state = 'CLIMB'; pete.climbGap = pete.floorIdx; pete.x = l.x; sfx('ladderStep'); return; }
+  }
+
+  // ACTION button: always jumps. Full stop -- single-button fidelity (Odyssey2/Atari 2600).
+  // The pick is not triggered here at all; see updatePickHits, which runs passively every
+  // tick regardless of what ACTION is doing.
+  if (pressed('Space') && pete.state !== 'JUMP') {
+    sfx('jump');
+    pete.state = 'JUMP';
+    pete.jumpT = 0;
+    pete.jumpDir = left ? -1 : (right ? 1 : 0);
+  }
+
+  // Deteriorated platforms: a gap with nothing under it. Jumping (handled above, this
+  // frame or already in progress) clears it; standing or ducking over one drops Pete a
+  // floor, unharmed -- same as the deliberate hold-down drop-through.
+  if (pete.state !== 'JUMP' && inGap(pete.floorIdx, pete.x)) {
+    pete.floorIdx = Math.min(pete.floorIdx + 1, FLOORS - 1);
+  }
+
+  pete.y = GEO.floorY[pete.floorIdx];
+}
+
+// ---------------------------------------------------------------
+// 7. RENDERER -- buffer canvas -> scaled output canvas.
+// ---------------------------------------------------------------
+const outCv = document.getElementById('out');
+const outCtx = outCv.getContext('2d');
+outCtx.imageSmoothingEnabled = true;
+outCtx.imageSmoothingQuality = 'high';
+
+// DRAW_SCALE: internal render resolution multiplier over the original 240x180 logic
+// space. MAILTO-style art (offscreen render buffer + smooth vector art, no such thing
+// as a "sprite asset" -- everything is painted live with canvas paths/gradients, the
+// same technique MAILTO! itself uses) needs real resolution to read as hand-drawn
+// rather than blocky. NOTHING in TUNING/GEO/the update/collision logic below is
+// touched -- every position, speed, and hitbox stays byte-for-byte the same as the
+// original ALTURAS PETE!, in the original 240x180 coordinate space. Only the draw*
+// functions multiply by S when they actually paint a pixel, so gameplay feel and the
+// self-test at the bottom of this file are both untouched.
+const DRAW_SCALE = 4;
+const S = DRAW_SCALE;
+const buf = document.createElement('canvas');
+buf.width = TUNING.bufW * DRAW_SCALE; buf.height = TUNING.bufH * DRAW_SCALE;
+const bctx = buf.getContext('2d');
+bctx.imageSmoothingEnabled = true;
+
+function fitScale() {
+  const sx = outCv.width / buf.width;
+  const sy = outCv.height / buf.height;
+  return Math.min(sx, sy); // integer-ish fit; pillarbox remainder
+}
+
+function drawField(pal) {
+  const field = currentField();
+  const W = TUNING.bufW * S, H = TUNING.bufH * S;
+
+  // MAILTO-style painted rock backdrop: a dark radial vignette instead of flat black,
+  // so the shaft reads as a lit pocket in a much bigger, darker mountain.
+  const bgGrad = bctx.createRadialGradient(W/2, H*0.42, H*0.15, W/2, H*0.42, H*0.95);
+  bgGrad.addColorStop(0, shadeColor(pal.wall, -55));
+  bgGrad.addColorStop(1, '#0a0705');
+  bctx.fillStyle = bgGrad;
+  bctx.fillRect(0, 0, W, H);
+
+  const drawStructure = () => {
+    // status bar divider -- a timber header beam
+    bctx.fillStyle = shadeColor(pal.wall, -20);
+    bctx.fillRect(0, (GEO.statusH - 2) * S, W, 2 * S);
+    bctx.fillStyle = shadeColor(pal.wall, 15);
+    bctx.fillRect(0, (GEO.statusH - 2) * S, W, 1 * S);
+
+    // side walls -- rough rock face, hatch-textured rather than a flat bar
+    for (const wx of [GEO.wallL - 2, GEO.wallR]) {
+      const x = wx * S;
+      bctx.fillStyle = shadeColor(pal.wall, -10);
+      bctx.fillRect(x, GEO.statusH * S, 2.6 * S, H - GEO.statusH * S);
+      bctx.strokeStyle = 'rgba(0,0,0,0.35)'; bctx.lineWidth = 0.6 * S;
+      for (let ry = GEO.statusH * S; ry < H; ry += 5 * S) {
+        bctx.beginPath(); bctx.moveTo(x, ry); bctx.lineTo(x + 2.6 * S, ry + 3 * S); bctx.stroke();
+      }
+    }
+
+    // floors -- a rough rock ledge (jagged top edge) over a beveled timber-shored
+    // face, in the field's own punchy floor color, broken by any generated gap.
+    const floorHi = shadeColor(pal.floor, 45), floorLo = shadeColor(pal.floor, -45);
+    function drawFloorSeg(x0, x1, y) {
+      const w = x1 - x0;
+      if (w <= 0) return;
+      const X0 = x0 * S, W2 = w * S, Y = y * S;
+      // jagged rocky cap along the top edge
+      bctx.fillStyle = floorLo;
+      bctx.beginPath();
+      bctx.moveTo(X0, Y);
+      const teeth = Math.max(2, Math.round(w / 6));
+      for (let t = 0; t <= teeth; t++) {
+        const tx = X0 + (W2 * t) / teeth;
+        const ty = Y - (t % 2 === 0 ? 1.6 * S : 0.2 * S);
+        bctx.lineTo(tx, ty);
+      }
+      bctx.lineTo(X0 + W2, Y + 3 * S); bctx.lineTo(X0, Y + 3 * S);
+      bctx.closePath(); bctx.fill();
+      bctx.fillStyle = floorHi; bctx.fillRect(X0, Y, W2, 0.7 * S);
+      bctx.fillStyle = pal.floor; bctx.fillRect(X0, Y + 0.9 * S, W2, 1.6 * S);
+      // squared-off timber support posts every ~40px of logic-space width
+      bctx.fillStyle = shadeColor(pal.wall, -25);
+      for (let px = x0 + 6; px < x1 - 6; px += 40) {
+        bctx.fillRect(px * S - 0.6 * S, Y - 6 * S, 1.2 * S, 6 * S);
+      }
+    }
+    for (let i = 0; i < FLOORS; i++) {
+      const g = floorGaps[i], y = GEO.floorY[i];
+      if (!g) {
+        drawFloorSeg(GEO.wallL, GEO.wallR, y);
+      } else {
+        drawFloorSeg(GEO.wallL, g.x0, y);
+        drawFloorSeg(g.x1, GEO.wallR, y);
+        // broken rubble edge teeth so the gap reads as a real collapse
+        bctx.fillStyle = floorLo;
+        bctx.beginPath();
+        bctx.moveTo(g.x0 * S - 1 * S, y * S + 1 * S);
+        bctx.lineTo(g.x0 * S + 1.5 * S, y * S - 1 * S);
+        bctx.lineTo(g.x0 * S + 1 * S, y * S + 2 * S);
+        bctx.closePath(); bctx.fill();
+        bctx.beginPath();
+        bctx.moveTo(g.x1 * S + 1 * S, y * S + 1 * S);
+        bctx.lineTo(g.x1 * S - 1.5 * S, y * S - 1 * S);
+        bctx.lineTo(g.x1 * S - 1 * S, y * S + 2 * S);
+        bctx.closePath(); bctx.fill();
+      }
+    }
+
+    // ladders -- lashed timber rails + rungs, warm accent glow, flash white near expiry
+    for (const l of ladders) {
+      const warn = (l.life - l.age) < 1.2 && Math.floor(simTime * 8) % 2 === 0;
+      const railColor = warn ? '#ffffff' : shadeColor(pal.accent, -10);
+      bctx.strokeStyle = railColor; bctx.lineWidth = 1.1 * S; bctx.lineCap = 'round';
+      const y0 = GEO.floorY[l.gapIdx] * S, y1 = GEO.floorY[l.gapIdx + 1] * S, lx = l.x * S;
+      bctx.beginPath(); bctx.moveTo(lx - 4 * S, y0); bctx.lineTo(lx - 4 * S, y1); bctx.stroke();
+      bctx.beginPath(); bctx.moveTo(lx + 4 * S, y0); bctx.lineTo(lx + 4 * S, y1); bctx.stroke();
+      bctx.strokeStyle = warn ? '#ffffff' : pal.accent; bctx.lineWidth = 1 * S;
+      for (let ry = y0 + 6 * S; ry < y1; ry += 6 * S) {
+        bctx.beginPath(); bctx.moveTo(lx - 4 * S, ry); bctx.lineTo(lx + 4 * S, ry); bctx.stroke();
+      }
+    }
+
+    // chute gates -- a swinging timber-and-iron gate: vertical (safe) most of the
+    // cycle, slamming horizontal (dangerous) in its brief active window
+    for (const g of gates) {
+      const horiz = gateIsHorizontal(g);
+      const gx = Math.round(g.x) * S, gy = GEO.floorY[g.floorIdx] * S;
+      bctx.save();
+      bctx.translate(gx, gy - (horiz ? 2 * S : 7 * S));
+      if (horiz) bctx.rotate(Math.PI / 2);
+      bctx.fillStyle = horiz ? '#f2ead8' : shadeColor(pal.wall, -15);
+      bctx.strokeStyle = '#000'; bctx.lineWidth = 0.4 * S;
+      bctx.fillRect(-1 * S, -7 * S, 2 * S, 14 * S);
+      bctx.strokeRect(-1 * S, -7 * S, 2 * S, 14 * S);
+      bctx.fillStyle = horiz ? '#ffe98a' : pal.accent;
+      bctx.fillRect(-1 * S, -0.6 * S, 2 * S, 1.2 * S); // iron band
+      if (horiz) { bctx.globalAlpha = 0.35; bctx.fillStyle = '#fff'; bctx.fillRect(-3*S,-9*S,6*S,18*S); bctx.globalAlpha = 1; }
+      bctx.restore();
+    }
+  };
+
+  // 700 Level: carbide out -- floors/walls/ladders/gates only render within Pete's
+  // lamp; a soft warm glow washes the lit pocket instead of a hard-edged circle.
+  if (field.carbideOut) {
+    bctx.save();
+    bctx.beginPath();
+    bctx.arc(pete.x * S, (peteVisualY() - 6) * S, 26 * S, 0, Math.PI * 2);
+    bctx.clip();
+    drawStructure();
+    const lampGrad = bctx.createRadialGradient(pete.x*S, (peteVisualY()-6)*S, 4*S, pete.x*S, (peteVisualY()-6)*S, 26*S);
+    lampGrad.addColorStop(0, 'rgba(255,220,150,0)');
+    lampGrad.addColorStop(0.75, 'rgba(255,220,150,0)');
+    lampGrad.addColorStop(1, 'rgba(5,4,3,0.6)');
+    bctx.fillStyle = lampGrad;
+    bctx.fillRect(0, 0, W, H);
+    bctx.restore();
+  } else {
+    drawStructure();
+  }
+
+  // doors -- timber mine-entrance arches, boulder spawn points on the top floor
+  for (const dx of GEO.doorX) {
+    const x = dx * S, y = GEO.floorY[0] * S;
+    bctx.fillStyle = shadeColor(pal.boulder, -15);
+    bctx.beginPath();
+    bctx.moveTo(x - 5*S, y); bctx.lineTo(x - 5*S, y - 9*S);
+    bctx.quadraticCurveTo(x - 5*S, y - 12*S, x, y - 12*S);
+    bctx.quadraticCurveTo(x + 5*S, y - 12*S, x + 5*S, y - 9*S);
+    bctx.lineTo(x + 5*S, y);
+    bctx.closePath(); bctx.fill();
+    bctx.strokeStyle = '#000'; bctx.lineWidth = 0.4*S; bctx.stroke();
+    bctx.fillStyle = pal.boulder;
+    bctx.fillRect(x - 3.4*S, y - 8*S, 6.8*S, 8*S);
+    // a small warm lantern glow marking every spawn door
+    bctx.fillStyle = '#ffe98a'; bctx.globalAlpha = 0.7 + 0.3*Math.sin(simTime*3+dx);
+    bctx.beginPath(); bctx.arc(x, y - 10.5*S, 1*S, 0, Math.PI*2); bctx.fill();
+    bctx.globalAlpha = 1;
+  }
+
+  // 500 Level: drifting haze, cosmetic only -- never affects collision
+  if (field.dust) {
+    const f1 = Math.floor(simTime / 3) % FLOORS;
+    const f2 = (f1 + 3) % FLOORS;
+    bctx.fillStyle = 'rgba(210,210,220,0.16)';
+    for (const fi of [f1, f2]) {
+      bctx.fillRect(GEO.wallL * S, (GEO.floorY[fi] - 16) * S, (GEO.wallR - GEO.wallL) * S, 16 * S);
+    }
+  }
+}
+
+function drawBoulders(pal) {
+  // tumbling rock: a shaded sphere (radial gradient) with a couple of crack facets
+  // that rotate with a deterministic per-boulder phase, instead of flat X/* glyphs
+  const rockHi = shadeColor(pal.boulder, 40), rockLo = shadeColor(pal.boulder, -50);
+  for (const b of boulders) {
+    const offset = b.type === 'HOPPER'
+      ? TUNING.hopperAmplitude * Math.abs(Math.sin((2 * Math.PI * b.age) / TUNING.hopperPeriod))
+      : 0;
+    const bx = b.x * S, by = (GEO.floorY[b.floorIdx] - offset) * S;
+    const r = 3.4 * S;
+    // contact shadow, sharper when hopping high above the floor
+    bctx.globalAlpha = clamp(0.35 - offset / (TUNING.hopperAmplitude * 3), 0.08, 0.35);
+    bctx.fillStyle = '#000';
+    bctx.beginPath(); bctx.ellipse(b.x * S, GEO.floorY[b.floorIdx] * S + 1 * S, r * 0.9, r * 0.32, 0, 0, Math.PI * 2); bctx.fill();
+    bctx.globalAlpha = 1;
+
+    const grad = bctx.createRadialGradient(bx - r * 0.35, by - r * 0.5, r * 0.15, bx, by, r);
+    grad.addColorStop(0, rockHi);
+    grad.addColorStop(0.6, pal.boulder);
+    grad.addColorStop(1, rockLo);
+    bctx.fillStyle = grad;
+    bctx.beginPath(); bctx.arc(bx, by - r * 0.85, r, 0, Math.PI * 2); bctx.fill();
+    bctx.strokeStyle = 'rgba(0,0,0,0.4)'; bctx.lineWidth = 0.35 * S; bctx.stroke();
+
+    // rotating crack facets -- reads as tumbling without a sprite sheet
+    const spin = b.age * (2 + Math.abs(b.dir)) * (b.dir >= 0 ? 1 : -1);
+    bctx.save();
+    bctx.translate(bx, by - r * 0.85);
+    bctx.rotate(spin);
+    bctx.strokeStyle = rockLo; bctx.lineWidth = 0.3 * S;
+    bctx.beginPath(); bctx.moveTo(-r * 0.5, -r * 0.2); bctx.lineTo(r * 0.4, r * 0.5); bctx.stroke();
+    bctx.beginPath(); bctx.moveTo(r * 0.5, -r * 0.35); bctx.lineTo(-r * 0.1, r * 0.55); bctx.stroke();
+    bctx.restore();
+  }
+}
+
+function drawPickups() {
+  for (const p of pickups) {
+    const x = p.x * S, y = p.y * S;
+    const bob = Math.sin(p.age * 5) * 0.6 * S;
+    if (p.kind === 'PICK') {
+      // small glowing pickaxe, matching Pete's own pick silhouette so it reads as
+      // "a spare of the tool you carry", not a generic pickup
+      bctx.globalAlpha = 0.35;
+      bctx.fillStyle = PICK_COLOR;
+      bctx.beginPath(); bctx.arc(x, y - 6 * S + bob, 6.5 * S, 0, Math.PI * 2); bctx.fill();
+      bctx.globalAlpha = 1;
+      bctx.strokeStyle = PICK_COLOR; bctx.lineWidth = 1 * S; bctx.lineCap = 'round';
+      bctx.beginPath(); bctx.moveTo(x, y - 3 * S + bob); bctx.lineTo(x, y - 8 * S + bob); bctx.stroke();
+      bctx.beginPath(); bctx.moveTo(x - 2.6 * S, y - 9.4 * S + bob); bctx.lineTo(x + 2.6 * S, y - 9.4 * S + bob); bctx.stroke();
+    } else {
+      // brass key with a bright sheen streak
+      const grad = bctx.createLinearGradient(x - 3 * S, y - 6 * S + bob, x + 3 * S, y + bob);
+      grad.addColorStop(0, '#a8862c'); grad.addColorStop(0.5, '#ffe98a'); grad.addColorStop(1, '#a8862c');
+      bctx.fillStyle = grad;
+      bctx.beginPath(); bctx.arc(x - 1.4 * S, y - 5 * S + bob, 2.2 * S, 0, Math.PI * 2); bctx.fill();
+      bctx.fillRect(x - 0.6 * S, y - 5 * S + bob, 1.2 * S, 6 * S);
+      bctx.fillRect(x, y + bob, 1.6 * S, 0.9 * S);
+      bctx.fillRect(x, y - 1.2 * S + bob, 1.2 * S, 0.7 * S);
+      bctx.strokeStyle = 'rgba(0,0,0,0.35)'; bctx.lineWidth = 0.3 * S;
+      bctx.beginPath(); bctx.arc(x - 1.4 * S, y - 5 * S + bob, 2.2 * S, 0, Math.PI * 2); bctx.stroke();
+    }
+  }
+}
+
+function drawFloaters() {
+  for (const f of floaters) {
+    bctx.font = 'bold ' + (7 * S) + 'px Georgia, serif';
+    bctx.textAlign = 'center';
+    bctx.fillStyle = 'rgba(0,0,0,0.5)';
+    bctx.fillText(f.text, f.x * S + 0.6 * S, f.y * S + 0.6 * S);
+    bctx.fillStyle = f.color;
+    bctx.fillText(f.text, f.x * S, f.y * S);
+  }
+  bctx.textAlign = 'left';
+}
+
+function drawHUD(pal) {
+  bctx.font = (7 * S) + 'px Georgia, serif';
+  bctx.textBaseline = 'top';
+
+  // row 2: depth on the left, field name (+ circuit, once looping) on the right --
+  // its own row so long historical mine names never collide with the pick meter
+  if (game.depth > 0) {
+    bctx.fillStyle = pal.accent;
+    bctx.fillText('DEPTH ' + game.depth, 4 * S, 3 * S);
+  }
+  bctx.fillStyle = pal.pete;
+  bctx.textAlign = 'right';
+  const circuit = circuitNum();
+  bctx.fillText(pal.name + (circuit > 0 ? ' \u00b7 CIRCUIT ' + (circuit + 1) : ''), TUNING.bufW * S - 4 * S, 3 * S);
+  bctx.textAlign = 'left';
+
+  if (game.keyHeld) {
+    const flashKey = Math.floor(performance.now() / 130) % 2 === 0;
+    bctx.fillStyle = flashKey ? '#f2ea6a' : pal.accent;
+    bctx.fillText('\u2726 KEY', 90 * S, 0.5 * S);
+  }
+
+  // pick meter: a leather tally-strip of little pickaxe notches for strikes remaining,
+  // flashing red in the warning zone -- same information as before, drawn as a tool
+  // instead of an abstract bar.
+  const warn = pick.armed && (pick.strikes <= TUNING.pickWarnStrikes || pick.timeLeft <= TUNING.pickWarnTime);
+  const flash = warn && Math.floor(performance.now() / 160) % 2 === 0;
+  const meterX = 150 * S, meterY = 1 * S;
+  if (!pick.armed) {
+    bctx.fillStyle = '#8a7268';
+    bctx.fillText('PICK BROKEN', meterX, meterY);
+  } else {
+    bctx.fillStyle = flash ? '#ff3b3b' : PICK_COLOR;
+    for (let i = 0; i < TUNING.pickStrikesMax; i++) {
+      if (i < pick.strikes) {
+        const nx = meterX + i * 3.6 * S;
+        bctx.fillRect(nx, meterY + 2 * S, 0.9 * S, 4.2 * S);
+        bctx.fillRect(nx - 0.7 * S, meterY + 1.6 * S, 2.3 * S, 0.9 * S);
+      }
+    }
+  }
+
+  // SCORE: the hand-authored dot-matrix digits, unchanged in every way except being
+  // drawn at DRAW_SCALE -- this is the one piece of the original's identity that
+  // stays pixel-exact rather than being repainted, by design.
+  drawDotMatrixNumber(String(game.score).padStart(5, '0'), TUNING.bufW * S - 4 * S, 163 * S, 2 * S, pal.floor);
+}
+
+function drawTransitionOverlay(pal) {
+  const W = TUNING.bufW * S, H = TUNING.bufH * S;
+  const grad = bctx.createRadialGradient(W/2, H/2, H*0.1, W/2, H/2, H*0.75);
+  grad.addColorStop(0, shadeColor(pal.wall, 15));
+  grad.addColorStop(1, shadeColor(pal.wall, -45));
+  bctx.fillStyle = grad;
+  bctx.fillRect(0, 0, W, H);
+  bctx.fillStyle = pal.pete;
+  bctx.font = 'bold ' + (12 * S) + 'px Georgia, serif';
+  bctx.textAlign = 'center';
+  bctx.fillText('DEPTH ' + game.depth, W / 2, H / 2 - 6 * S);
+  bctx.font = (7 * S) + 'px Georgia, serif';
+  bctx.fillStyle = pal.accent;
+  const pulse = 0.6 + Math.sin(simTime * 4) * 0.4;
+  bctx.globalAlpha = pulse;
+  bctx.fillText('DESCENDING\u2026', W / 2, H / 2 + 10 * S);
+  bctx.globalAlpha = 1;
+  bctx.textAlign = 'left';
+}
+
+function drawDeathOverlay(pal) {
+  const W = TUNING.bufW * S, H = TUNING.bufH * S;
+  bctx.fillStyle = 'rgba(10,6,4,0.62)';
+  bctx.fillRect(0, 0, W, H);
+  bctx.fillStyle = pal.boulder;
+  bctx.font = 'bold ' + (15 * S) + 'px Georgia, serif';
+  bctx.textAlign = 'center';
+  bctx.fillText('BOWLED OVER', W / 2, H / 2 - 14 * S);
+  bctx.fillStyle = pal.pete;
+  bctx.font = (8 * S) + 'px Georgia, serif';
+  bctx.fillText('SCORE ' + game.score, W / 2, H / 2 + 4 * S);
+  const pulse = 0.55 + Math.sin(simTime * 3) * 0.45;
+  bctx.globalAlpha = pulse;
+  bctx.fillStyle = '#e8b23c';
+  bctx.fillText('ENTER TO RESTART', W / 2, H / 2 + 16 * S);
+  bctx.globalAlpha = 1;
+  bctx.textAlign = 'left';
+}
+
+// MAILTO-style miner sprite: painted with shaded canvas paths (coat, head, hat, boots)
+// exactly the way MAILTO! draws its postcarrier, rather than the original's flat pixel
+// blocks -- but every hitbox number below (bw/bh, pick reach, etc.) is completely
+// untouched from the source file, so nothing about the actual game changed, only how
+// it's painted.
+function drawPete(pal) {
+  const ducking = pete.state === 'DUCK';
+  const [bwFull, bh] = ducking ? TUNING.petePickBoxDuck : TUNING.petePickBoxStand;
+  const bw = pick.armed ? bwFull : Math.max(4, bwFull - 2);
+  const climbing = pete.state === 'CLIMB';
+  const stuck = pete.state === 'DOORSTUCK';
+  const airborne = pete.state === 'JUMP';
+  const moving = !ducking && !climbing && !stuck && pressed('ArrowLeft','KeyA','ArrowRight','KeyD');
+  const flashing = pete.swingFlashT > 0;
+  const shake = stuck ? (Math.floor(performance.now() / 60) % 2 === 0 ? 1 : -1) : 0;
+  const px = (pete.x + shake) * S;
+  const py = peteVisualY() * S; // foot line
+
+  const keyFlash = game.keyHeld && Math.floor(performance.now() / 130) % 2 === 0;
+  const coat = keyFlash ? '#c9a23a' : pal.pete;
+  const coatDark = shadeColor(coat, -40);
+  const coatLight = shadeColor(coat, 25);
+  const skin = '#d9a066';
+  const facing = pete.facing;
+
+  bctx.save();
+  bctx.globalAlpha = flashing ? 0.55 : 1;
+  bctx.translate(px, py);
+  bctx.scale(facing, 1);
+
+  // contact shadow
+  bctx.globalAlpha *= airborne ? 0.15 : 0.3;
+  bctx.fillStyle = '#000';
+  bctx.beginPath(); bctx.ellipse(0, 1.5 * S, (ducking ? 4.5 : 3.6) * S, 1 * S, 0, 0, Math.PI * 2); bctx.fill();
+  bctx.globalAlpha = flashing ? 0.55 : 1;
+
+  const bodyH = (ducking ? bh : bh - 1.6) * S;
+  const top = -bodyH;
+  const stride = Math.sin(pete.animT * 9);
+
+  // legs / boots
+  bctx.strokeStyle = coatDark; bctx.lineWidth = 1.1 * S; bctx.lineCap = 'round';
+  if (climbing) {
+    bctx.beginPath();
+    bctx.moveTo(-1 * S, -0.5 * S); bctx.lineTo(-1.8 * S, 1.6 * S);
+    bctx.moveTo(1 * S, -0.5 * S); bctx.lineTo(1.8 * S, 1.6 * S);
+    bctx.stroke();
+  } else if (airborne) {
+    bctx.beginPath();
+    bctx.moveTo(-1 * S, -0.5 * S); bctx.lineTo(-2.2 * S, 0.6 * S); bctx.lineTo(-1.4 * S, 1.4 * S);
+    bctx.moveTo(1 * S, -0.5 * S); bctx.lineTo(2.4 * S, 0.2 * S); bctx.lineTo(3 * S, 1 * S);
+    bctx.stroke();
+  } else if (!ducking) {
+    bctx.beginPath();
+    bctx.moveTo(-1 * S, -0.5 * S); bctx.lineTo(-1 * S + (moving ? stride : 0) * 1.6 * S, 1.6 * S);
+    bctx.moveTo(1 * S, -0.5 * S); bctx.lineTo(1 * S - (moving ? stride : 0) * 1.6 * S, 1.6 * S);
+    bctx.stroke();
+    bctx.strokeStyle = '#1c1208'; bctx.lineWidth = 1.3 * S;
+    const s1 = (moving ? stride : 0) * 1.6 * S, s2 = -(moving ? stride : 0) * 1.6 * S;
+    bctx.beginPath();
+    bctx.moveTo(-1 * S + s1, 1.6 * S); bctx.lineTo(-1 * S + s1 + facing * 1 * S, 1.6 * S);
+    bctx.moveTo(1 * S + s2, 1.6 * S); bctx.lineTo(1 * S + s2 + facing * 1 * S, 1.6 * S);
+    bctx.stroke();
+  }
+
+  // coat / torso -- a beveled trapezoid with shaded + lit sides for volume, canvas
+  // duck cloth rather than MAILTO's wool coat, but the same construction technique
+  const coatTop = ducking ? -bh * S + 1.5 * S : top + 1.5 * S;
+  const coatBot = ducking ? -0.8 * S : -0.8 * S;
+  const halfW = (ducking ? bw * 0.5 : bw * 0.42) * S;
+  bctx.fillStyle = coat;
+  bctx.beginPath();
+  bctx.moveTo(-halfW * 0.75, coatTop);
+  bctx.lineTo(halfW * 0.75, coatTop);
+  bctx.lineTo(halfW, coatBot);
+  bctx.lineTo(-halfW, coatBot);
+  bctx.closePath(); bctx.fill();
+  bctx.fillStyle = 'rgba(0,0,0,0.22)';
+  bctx.beginPath();
+  bctx.moveTo(-halfW * 0.75, coatTop); bctx.lineTo(0, coatTop); bctx.lineTo(-halfW * 0.3, coatBot); bctx.lineTo(-halfW, coatBot);
+  bctx.closePath(); bctx.fill();
+  bctx.fillStyle = 'rgba(255,255,255,0.16)';
+  bctx.beginPath();
+  bctx.moveTo(halfW * 0.3, coatTop); bctx.lineTo(halfW * 0.75, coatTop); bctx.lineTo(halfW, coatBot); bctx.lineTo(halfW * 0.55, coatBot);
+  bctx.closePath(); bctx.fill();
+  bctx.strokeStyle = '#2b1d10'; bctx.lineWidth = 0.4 * S; bctx.lineJoin = 'round';
+  bctx.beginPath();
+  bctx.moveTo(-halfW * 0.75, coatTop); bctx.lineTo(halfW * 0.75, coatTop); bctx.lineTo(halfW, coatBot); bctx.lineTo(-halfW, coatBot);
+  bctx.closePath(); bctx.stroke();
+
+  if (!ducking) {
+    // arms
+    bctx.strokeStyle = coat; bctx.lineWidth = 1.1 * S; bctx.lineCap = 'round';
+    const armY = coatTop + 1.4 * S;
+    if (climbing) {
+      bctx.beginPath();
+      bctx.moveTo(-1.6 * S, armY); bctx.lineTo(-1 * S, armY - 2.6 * S);
+      bctx.moveTo(1.6 * S, armY); bctx.lineTo(1 * S, armY - 2.6 * S);
+      bctx.stroke();
+    } else if (!flashing) {
+      bctx.beginPath();
+      bctx.moveTo(-halfW * 0.85, armY); bctx.lineTo(-halfW * 0.85 - stride * 0.8 * S, armY + 2.6 * S);
+      bctx.stroke();
+    }
+
+    // head, skin + cheek + eye
+    const headR = 1.6 * S;
+    const headY = coatTop - 0.9 * S;
+    bctx.fillStyle = skin;
+    bctx.beginPath(); bctx.arc(0, headY, headR, 0, Math.PI * 2); bctx.fill();
+    bctx.fillStyle = 'rgba(0,0,0,0.15)';
+    bctx.beginPath(); bctx.arc(-0.5 * S, headY, headR, Math.PI * 0.5, Math.PI * 1.5); bctx.fill();
+    bctx.fillStyle = '#2b1d10';
+    bctx.beginPath(); bctx.arc(0.9 * S, headY - 0.1 * S, 0.28 * S, 0, Math.PI * 2); bctx.fill();
+
+    // flat cap + brim, with the carbide lamp mounted front-and-center -- the field's
+    // OWN light source, always lit (dims/flickers on the 700 Level's carbide-out floor)
+    bctx.fillStyle = coatDark;
+    bctx.beginPath(); bctx.ellipse(0, headY - 1.4 * S, headR * 1.15, 0.7 * S, 0, 0, Math.PI * 2); bctx.fill();
+    bctx.fillRect(-headR * 1.15, headY - 1.4 * S, headR * 2.3, 0.9 * S);
+    bctx.fillStyle = coatLight;
+    bctx.beginPath(); bctx.ellipse(0.3 * S, headY - 1.9 * S, headR * 0.85, 0.5 * S, 0, 0, Math.PI * 2); bctx.fill();
+    const lampOn = !(currentField().carbideOut) || (Math.floor(simTime * 6) % 3 !== 0);
+    if (lampOn) {
+      bctx.fillStyle = '#ffd97a';
+      bctx.beginPath(); bctx.arc(headR * 0.9, headY - 1.9 * S, 0.55 * S, 0, Math.PI * 2); bctx.fill();
+      const glow = bctx.createRadialGradient(headR * 0.9, headY - 1.9 * S, 0, headR * 0.9, headY - 1.9 * S, 3.4 * S);
+      glow.addColorStop(0, 'rgba(255,220,150,0.55)'); glow.addColorStop(1, 'rgba(255,220,150,0)');
+      bctx.fillStyle = glow;
+      bctx.beginPath(); bctx.arc(headR * 0.9, headY - 1.9 * S, 3.4 * S, 0, Math.PI * 2); bctx.fill();
+    }
+  } else {
+    bctx.fillStyle = shadeColor(skin, -10);
+    bctx.beginPath(); bctx.arc(halfW * 0.5, coatTop, 1.1 * S, 0, Math.PI * 2); bctx.fill();
+  }
+
+  // facing nub -- kept from the original as a tiny direction tell even from the back
+  bctx.fillStyle = '#000';
+  bctx.fillRect(halfW * 0.9, coatTop + 0.6 * S, 0.4 * S, 0.8 * S);
+
+  // The pick -- an L-shaped tool (handle + angled steel head), the one color that
+  // never shifts with the field's palette so it always reads as "your tool". This is
+  // the passive hazard zone itself, always present while armed, gated by facing only.
+  if (pick.armed) {
+    const handY = coatTop + (ducking ? 0.8 * S : 1.8 * S);
+    const reach = (flashing ? 10 : 5) * S;
+    bctx.strokeStyle = flashing ? '#ffffff' : PICK_COLOR;
+    bctx.lineWidth = 1 * S; bctx.lineCap = 'round';
+    bctx.beginPath(); bctx.moveTo(halfW * 0.9, handY); bctx.lineTo(halfW * 0.9 + reach, handY - reach * 0.35); bctx.stroke();
+    bctx.fillStyle = flashing ? '#ffffff' : PICK_COLOR;
+    bctx.save();
+    bctx.translate(halfW * 0.9 + reach, handY - reach * 0.35);
+    bctx.rotate(-0.5);
+    bctx.fillRect(-2.2 * S, -0.6 * S, 4.4 * S, 1.2 * S);
+    bctx.restore();
+  }
+
+  bctx.restore();
+  bctx.globalAlpha = 1;
+}
+
+function renderPlayField() {
+  const pal = currentPalette();
+
+  if (game.transitionT > 0) {
+    drawTransitionOverlay(pal);
+  } else {
+    drawField(pal);
+    drawBoulders(pal);
+    drawPickups();
+    drawPete(pal);
+    drawFloaters();
+    drawHUD(pal);
+
+    if (gameMode === 'PICKOFF') {
+      bctx.fillStyle = pal.accent;
+      bctx.font = (8 * S) + 'px Georgia, serif';
+      bctx.textAlign = 'center';
+      const m = Math.floor(pickOff.timeLeft / 60), s = Math.floor(pickOff.timeLeft % 60);
+      bctx.fillText(`${m}:${String(s).padStart(2,'0')}`, TUNING.bufW * S / 2, 2 * S);
+      bctx.textAlign = 'left';
+    } else if (gameMode === 'SHIFT') {
+      bctx.fillStyle = pal.accent;
+      bctx.font = (8 * S) + 'px Georgia, serif';
+      bctx.textAlign = 'center';
+      bctx.fillText(`P${shift.activeIndex + 1}/${shift.numPlayers}`, TUNING.bufW * S / 2, 2 * S);
+      bctx.textAlign = 'left';
+    }
+  }
+
+  if (game.state === 'DEAD') drawDeathOverlay(pal);
+  if (uiScreen === 'ATTRACT') {
+    bctx.fillStyle = 'rgba(0,0,0,0.4)';
+    bctx.fillRect(0, (TUNING.bufH - 12) * S, TUNING.bufW * S, 12 * S);
+    bctx.fillStyle = '#fff';
+    bctx.font = (7 * S) + 'px Georgia, serif';
+    bctx.textAlign = 'center';
+    bctx.fillText('DEMONSTRATION \u2014 PRESS ANY KEY', TUNING.bufW * S / 2, (TUNING.bufH - 10) * S);
+    bctx.textAlign = 'left';
+  }
+
+  if (debugOn) {
+    document.getElementById('dbg').textContent =
+      `state=${pete.state} floor=${pete.floorIdx} x=${pete.x.toFixed(1)} y=${pete.y.toFixed(1)} ` +
+      `pick=${pick.armed}(${pick.strikes}/${pick.timeLeft.toFixed(1)}s) boulders=${boulders.length} ` +
+      `pickups=${pickups.length} key=${game.keyHeld} depth=${game.depth} field=${fieldIndex()} circuit=${circuitNum()} ` +
+      `ladders=${ladders.length} gates=${gates.length} transT=${game.transitionT.toFixed(2)} ` +
+      `score=${game.score} game=${game.state} uiScreen=${uiScreen} mode=${gameMode}`;
+  }
+}
+
+function centerText(text, y, size, color) {
+  bctx.fillStyle = color;
+  bctx.font = (size * S) + 'px Georgia, serif';
+  bctx.textAlign = 'center';
+  bctx.fillText(text, TUNING.bufW * S / 2, y * S);
+  bctx.textAlign = 'left';
+}
+
+// Shared painted backdrop for every menu/scoring screen -- a warm radial-lit rock
+// wall in the current (or, before any run, the first) field's palette, instead of
+// flat black, so these screens read as part of the same mine as gameplay.
+function paintMenuBackdrop(pal) {
+  const W = TUNING.bufW * S, H = TUNING.bufH * S;
+  const grad = bctx.createRadialGradient(W/2, H*0.4, H*0.1, W/2, H*0.4, H*0.9);
+  grad.addColorStop(0, shadeColor(pal.wall, -35));
+  grad.addColorStop(1, '#080604');
+  bctx.fillStyle = grad;
+  bctx.fillRect(0, 0, W, H);
+}
+
+function drawTitleScreen() {
+  paintMenuBackdrop(PALETTES[0]);
+  centerText('ALTURAS PETE!', 40, 16, '#e8b23c');
+  const champ = topScore('DIG');
+  centerText(champ ? `CHAMPION  ${champ.name}  ${champ.score}` : 'NO CHAMPION YET', 68, 8, '#5fb46a');
+  const pulse = 0.65 + Math.sin(performance.now() * 0.003) * 0.35;
+  bctx.globalAlpha = pulse; centerText('PRESS ENTER TO START', 98, 8, '#f2ead8'); bctx.globalAlpha = 1;
+  centerText('AUDIO: ' + audioMode + '  (M music / N sfx mute)', 118, 7, '#8a7268');
+  centerText('an homage to Pick Axe Pete! (Magnavox Odyssey\u00b2, 1982,', 150, 6, '#5a4a3c');
+  centerText('Ed & Linda Averett) \u2014 a fan work, unaffiliated.', 160, 6, '#5a4a3c');
+}
+
+function drawModeSelect() {
+  paintMenuBackdrop(PALETTES[0]);
+  centerText('CHOOSE YOUR DESCENT', 30, 10, '#e8b23c');
+  MODE_LIST.forEach((m, i) => {
+    const y = 60 + i * 20;
+    const sel = i === menu.modeIndex;
+    if (sel) centerText('\u25b8 ' + MODE_LABEL[m] + ' \u25c2', y, 9, '#f2ea6a');
+    else centerText(MODE_LABEL[m], y, 9, '#8a7268');
+    const best = topScore(m);
+    centerText(best ? `best: ${best.name} ${best.score}` : 'best: \u2014', y + 9, 6, '#5a4a3c');
+  });
+  centerText('\u2191\u2193 CHOOSE \u00b7 ENTER CONFIRM', TUNING.bufH - 14, 6, '#5a4a3c');
+}
+
+function drawPlayersScreen() {
+  paintMenuBackdrop(PALETTES[0]);
+  centerText('SHIFT ROTATION', 40, 12, '#e8b23c');
+  centerText('\u25c2  ' + shift.numPlayers + ' PLAYERS  \u25b8', 76, 12, '#f2ea6a');
+  centerText('\u2190\u2192 CHOOSE (2-4) \u00b7 ENTER CONFIRM', TUNING.bufH - 14, 6, '#5a4a3c');
+}
+
+function drawScorePlate(isNew) {
+  const pal = currentPalette();
+  paintMenuBackdrop(pal);
+  centerText('RUN OVER', 34, 12, pal.boulder);
+  centerText('SCORE ' + game.score, 58, 10, pal.pete);
+  centerText('DEPTH REACHED ' + game.depth, 72, 8, pal.accent);
+  if (isNew) {
+    centerText('NEW HIGH SCORE!', 96, 9, '#f2ea6a');
+    centerText('ENTER TO CLAIM IT', 112, 7, '#f2ead8');
+  } else {
+    centerText('ENTER TO CONTINUE', 112, 7, '#f2ead8');
+  }
+}
+
+function drawShiftResults() {
+  paintMenuBackdrop(currentPalette());
+  centerText('SHIFT COMPLETE', 26, 11, '#e8b23c');
+  let bestIdx = 0;
+  for (let i = 1; i < shift.scores.length; i++) if (shift.scores[i] > shift.scores[bestIdx]) bestIdx = i;
+  for (let i = 0; i < shift.numPlayers; i++) {
+    const y = 50 + i * 12;
+    const winner = i === bestIdx;
+    centerText(`P${i+1}  ${shift.scores[i] || 0}${winner ? '  \u2605' : ''}`, y, 8, winner ? '#f2ea6a' : '#f2ead8');
+  }
+  centerText('ENTER TO CONTINUE', TUNING.bufH - 16, 7, '#5a4a3c');
+}
+
+function drawNameEntryScreen() {
+  paintMenuBackdrop(currentPalette());
+  centerText('NEW HIGH SCORE', 30, 11, '#f2ea6a');
+  centerText(MODE_LABEL[nameEntry.pendingMode] + '  ' + nameEntry.pendingScore, 46, 8, '#f2ead8');
+  const spacing = 16;
+  const startX = (TUNING.bufW / 2 - spacing * 2.5) * S;
+  for (let i = 0; i < 6; i++) {
+    const x = startX + i * spacing * S;
+    const sel = i === nameEntry.cursor;
+    bctx.fillStyle = sel ? '#f2ea6a' : '#f2ead8';
+    bctx.font = (12 * S) + 'px Georgia, serif';
+    bctx.textAlign = 'center';
+    bctx.fillText(nameEntry.chars[i], x, 76 * S);
+    if (sel) bctx.fillRect(x - 4 * S, 92 * S, 8 * S, 2 * S);
+  }
+  bctx.textAlign = 'left';
+  centerText('\u2190\u2192 LETTER \u00b7 \u2191\u2193 POSITION \u00b7 ENTER DONE', TUNING.bufH - 14, 6, '#5a4a3c');
+}
+
+function render() {
+  if (uiScreen === 'PLAY' || uiScreen === 'ATTRACT') {
+    renderPlayField();
+  } else if (uiScreen === 'TITLE') {
+    drawTitleScreen();
+  } else if (uiScreen === 'MODESELECT') {
+    drawModeSelect();
+  } else if (uiScreen === 'PLAYERS') {
+    drawPlayersScreen();
+  } else if (uiScreen === 'SCOREPLATE') {
+    drawScorePlate(false);
+  } else if (uiScreen === 'SCOREPLATE_NEW') {
+    drawScorePlate(true);
+  } else if (uiScreen === 'NAMEENTRY') {
+    drawNameEntryScreen();
+  } else if (uiScreen === 'SHIFTRESULTS') {
+    drawShiftResults();
+  }
+
+  // blit buffer to output, scaled and centered (pillarbox)
+  const scale = fitScale();
+  const dw = buf.width * scale, dh = buf.height * scale;
+  const dx = (outCv.width - dw) / 2, dy = (outCv.height - dh) / 2;
+  outCtx.fillStyle = '#0e0a06';
+  outCtx.fillRect(0, 0, outCv.width, outCv.height);
+  outCtx.drawImage(buf, 0, 0, buf.width, buf.height, dx, dy, dw, dh);
+}
+
+
+// 7b. AUDIO -- procedural, no audio files. PURE mirrors the Odyssey2's
+//     single-voice square/noise reality; ENRICHED (default) layers a
+//     couple of oscillators for a fuller chiptune feel. M/N mute
+//     music/SFX independently (checked in the keydown handler above).
+// ---------------------------------------------------------------
+let audioMode = 'ENRICHED'; // 'ENRICHED' | 'PURE'
+let musicMuted = false, sfxMuted = false;
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { audioCtx = null; }
+  }
+  // Autoplay policy frequently creates (or leaves) the context 'suspended' since our
+  // sounds fire from the game loop reading key state a frame later, not synchronously
+  // inside the original keydown event -- resume() is a safe no-op once already running,
+  // but skipping it here silently drops every sound with no error thrown.
+  if (audioCtx && audioCtx.state === 'suspended') { audioCtx.resume().catch(() => {}); }
+  return audioCtx;
+}
+
+function playTone(freq, dur, wave, gain) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = wave; osc.frequency.value = freq;
+  g.gain.value = gain;
+  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + dur);
+}
+
+function playNoise(dur, gain) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const bufLen = Math.floor(ctx.sampleRate * dur);
+  const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufLen; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufLen);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain(); g.gain.value = gain;
+  src.connect(g); g.connect(ctx.destination);
+  src.start();
+}
+
+// name -> { freq, dur, wave } for ENRICHED; PURE collapses everything to a plain square blip.
+const SFX_DEF = {
+  jump:          { freq: 320, dur: 0.08, wave: 'square' },
+  duck:          { freq: 180, dur: 0.06, wave: 'square' },
+  pickSwing:     { freq: 500, dur: 0.05, wave: 'triangle' },
+  pickStrike:    { freq: 720, dur: 0.09, wave: 'square' },
+  pickWarn:      { freq: 260, dur: 0.05, wave: 'square' },
+  pickShatter:   { freq: 90,  dur: 0.30, wave: 'sawtooth', noise: true },
+  pickup:        { freq: 660, dur: 0.10, wave: 'triangle' },
+  keyPickup:     { freq: 880, dur: 0.14, wave: 'triangle' },
+  boulderSpawn:  { freq: 150, dur: 0.10, wave: 'sawtooth' },
+  wallHit:       { freq: 100, dur: 0.06, wave: 'square' },
+  boulderCollide:{ freq: 110, dur: 0.16, wave: 'square', noise: true },
+  pickSpawn:     { freq: 520, dur: 0.08, wave: 'triangle' },
+  keySpawn:      { freq: 780, dur: 0.10, wave: 'triangle' },
+  doorStuck:     { freq: 140, dur: 0.20, wave: 'sawtooth' },
+  doorUnlock:    { freq: 1000, dur: 0.22, wave: 'square' },
+  death:         { freq: 200, dur: 0.5, wave: 'sawtooth', noise: true },
+  ladderStep:    { freq: 400, dur: 0.03, wave: 'square' },
+  menuMove:      { freq: 440, dur: 0.04, wave: 'square' },
+  menuConfirm:   { freq: 660, dur: 0.10, wave: 'square' },
+};
+
+function sfx(name) {
+  if (sfxMuted) return;
+  const def = SFX_DEF[name];
+  if (!def) return;
+  if (audioMode === 'PURE') {
+    playTone(def.freq, Math.min(def.dur, 0.12), 'square', 0.08);
+    return;
+  }
+  playTone(def.freq, def.dur, def.wave, 0.13);
+  if (def.noise) playNoise(def.dur, 0.09);
+}
+
+// Music: a short 4-note ostinato that transposes down and speeds up with depth --
+// "the same tune gone claustrophobic" ten fields in, per the GDD. Kept deliberately
+// quiet relative to SFX (see gain below) so it sits behind the action, not on top of it.
+const MOTIF = [0, 3, 5, 7];
+let musicTimer = null, musicStep = 0;
+function noteFreq(semis) { return 220 * Math.pow(2, semis / 12); }
+function startMusic() {
+  stopMusic();
+  if (musicMuted) return;
+  const stepMs = Math.max(140, 220 - fieldIndex() * 8) * (audioMode === 'PURE' ? 1.15 : 1);
+  musicTimer = setInterval(() => {
+    if (musicMuted) return;
+    const semis = MOTIF[musicStep % MOTIF.length] - fieldIndex();
+    playTone(noteFreq(semis), stepMs / 1000 * 0.4, audioMode === 'PURE' ? 'square' : 'triangle', 0.014);
+    musicStep++;
+  }, stepMs);
+}
+function stopMusic() { if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } musicStep = 0; }
+
+// ---------------------------------------------------------------
+// 7c. HIGH SCORES -- localStorage, with a graceful no-op if unavailable.
+// ---------------------------------------------------------------
+const HS_KEY = 'alturasPeteHighScores_v1';
+function loadHighScores() {
+  try {
+    const raw = localStorage.getItem(HS_KEY);
+    if (!raw) return { DIG: [], PICKOFF: [], SHIFT: [] };
+    const parsed = JSON.parse(raw);
+    return { DIG: parsed.DIG || [], PICKOFF: parsed.PICKOFF || [], SHIFT: parsed.SHIFT || [] };
+  } catch (e) { return { DIG: [], PICKOFF: [], SHIFT: [] }; }
+}
+function saveHighScores() {
+  try { localStorage.setItem(HS_KEY, JSON.stringify(highScores)); } catch (e) { /* graceful no-op */ }
+}
+let highScores = loadHighScores();
+
+function qualifiesForHighScore(mode, score) {
+  const list = highScores[mode] || [];
+  if (score <= 0) return false;
+  if (list.length < TUNING.highScoreSlots) return true;
+  return score > Math.min(...list.map(e => e.score));
+}
+function insertHighScore(mode, name, score) {
+  const list = highScores[mode] || (highScores[mode] = []);
+  list.push({ name, score });
+  list.sort((a, b) => b.score - a.score);
+  highScores[mode] = list.slice(0, TUNING.highScoreSlots);
+  saveHighScores();
+}
+function topScore(mode) {
+  const list = highScores[mode] || [];
+  return list.length ? list[0] : null;
+}
+
+// ---------------------------------------------------------------
+// 7d. SCREEN / MODE STATE MACHINE
+// ---------------------------------------------------------------
+// uiScreen: TITLE | MODESELECT | PLAYERS | PLAY | SCOREPLATE | NAMEENTRY | SHIFTRESULTS | ATTRACT
+let uiScreen = 'TITLE';
+let idleT = 0;
+let deathFreezeT = 0;
+let gameMode = 'DIG'; // DIG | PICKOFF | SHIFT
+const pickOff = { timeLeft: 0 };
+const shift = { numPlayers: 2, activeIndex: 0, scores: [] };
+const menu = { modeIndex: 0 }; // MODESELECT cursor
+const nameEntry = { chars: ['A','A','A','A','A','A'], cursor: 0, pendingMode: 'DIG', pendingScore: 0 };
+const MODE_LIST = ['DIG', 'PICKOFF', 'SHIFT'];
+const MODE_LABEL = { DIG: 'DIG', PICKOFF: 'PICK-OFF', SHIFT: 'SHIFT ROTATION' };
+const attract = { t: 0 };
+
+function goTitle() {
+  uiScreen = 'TITLE';
+  idleT = 0;
+  stopMusic();
+}
+
+function startRun() {
+  resetGame();
+  deathFreezeT = 0;
+  if (gameMode === 'PICKOFF') pickOff.timeLeft = TUNING.pickOffSec;
+  uiScreen = 'PLAY';
+  startMusic();
+}
+
+// deterministic synthetic input for ATTRACT -- same seed + same formula = same demo every time
+function attractInputAt(t) {
+  const cyc = t % 4;
+  return {
+    ArrowLeft: cyc < 1,
+    ArrowRight: cyc >= 1 && cyc < 2,
+    ArrowUp: cyc >= 2 && cyc < 2.6,
+    ArrowDown: cyc >= 2.6 && cyc < 3,
+    Space: Math.floor(t * 3) % 5 === 0,
+  };
+}
+
+// The actual gameplay tick, run for both real PLAY and scripted ATTRACT.
+function tickPlay(dt) {
+  simTime += dt;
+
+  if (game.state === 'DEAD') {
+    deathFreezeT -= dt;
+    if (deathFreezeT > 0) return;
+    if (uiScreen === 'PLAY') onRunEnded(); // ATTRACT just sits dead; tick()'s ATTRACT branch loops it
+    return;
+  }
+
+  if (gameMode === 'PICKOFF' && uiScreen === 'PLAY') {
+    pickOff.timeLeft -= dt;
+    if (pickOff.timeLeft <= 0) { pickOff.timeLeft = 0; game.state = 'DEAD'; deathFreezeT = 0; onRunEnded(); return; }
+  }
+
+  if (game.transitionT > 0) {
+    game.transitionT = Math.max(0, game.transitionT - dt);
+    if (game.transitionT === 0) startMusic(); // re-pitch for the new field
+  } else {
+    updateDoorSpawn(dt);
+    updateLadders(dt);
+    updateBoulders(dt);
+    updateBoulderCollisions();
+    updateGates();
+    updatePete(dt);
+    updatePickHits();
+    checkDoorTouch();
+    checkCollisions();
+    updatePickups(dt);
+    updatePick(dt);
+  }
+  updateFloaters(dt);
+}
+
+// Restart on the CURRENT field without touching depth (score is preserved by the
+// caller) -- used by PICK-OFF's death penalty. Deliberately does NOT call resetGame(),
+// which would reseed ladders/gates for depth 0 before depth got restored, leaving the
+// visible field looking right but the underlying tuning wrong.
+function restartFieldKeepingProgress() {
+  boulders = []; pickups = []; floaters = [];
+  game.keyHeld = false; game.transitionT = 0; game.state = 'PLAY';
+  resetPick();
+  seedLadders(); seedGates();
+  doorSpawnT = currentField().spawnMs / 1000;
+  pete.x = 120; pete.y = GEO.floorY[3]; pete.floorIdx = 3; pete.facing = 1;
+  pete.state = 'WALK'; pete.climbGap = -1; pete.jumpT = 0; pete.jumpDir = 0;
+  pete.duckHoldMs = 0; pete.swingFlashT = 0; pete.stuckT = 0; pete.stuckDoorX = 0; pete.gateCooldown = 0;
+}
+
+// Called once a death (or PICK-OFF time-up) has actually resolved -- routes to whatever
+// comes next depending on the active mode.
+function onRunEnded() {
+  if (gameMode === 'PICKOFF' && pickOff.timeLeft > 0) {
+    // ordinary death mid-attempt: costs time, continues on the SAME field, score kept
+    pickOff.timeLeft = Math.max(0, pickOff.timeLeft - TUNING.pickOffPenaltySec);
+    restartFieldKeepingProgress();
+    return;
+  }
+  if (gameMode === 'SHIFT') {
+    shift.scores[shift.activeIndex] = game.score;
+    shift.activeIndex++;
+    if (shift.activeIndex < shift.numPlayers) {
+      resetGame();
+      uiScreen = 'PLAY'; // next player's turn, fresh run
+      startMusic();
+    } else {
+      stopMusic();
+      uiScreen = 'SHIFTRESULTS';
+    }
+    return;
+  }
+  // DIG, or PICKOFF whose clock just ran out
+  stopMusic();
+  const finalScore = game.score;
+  if (qualifiesForHighScore(gameMode, finalScore)) {
+    nameEntry.pendingMode = gameMode;
+    nameEntry.pendingScore = finalScore;
+    nameEntry.chars = ['A','A','A','A','A','A'];
+    nameEntry.cursor = 0;
+    uiScreen = 'SCOREPLATE_NEW'; // score plate that leads into name entry on Enter
+  } else {
+    uiScreen = 'SCOREPLATE';
+  }
+}
+
+function updateMenus(dt) {
+  if (uiScreen === 'TITLE') {
+    idleT += dt;
+    if (justPressed('Enter')) { sfx('menuConfirm'); uiScreen = 'MODESELECT'; idleT = 0; }
+    else if (justPressed('ArrowUp','ArrowDown','ArrowLeft','ArrowRight')) { idleT = 0; }
+    if (idleT >= TUNING.idleAttractSec) {
+      rng = mulberry32(987654321); // fixed seed -- same demo every time
+      gameMode = 'DIG';
+      resetGame();
+      attract.t = 0;
+      uiScreen = 'ATTRACT';
+      anyKeyThisFrame = false;
+    }
+  } else if (uiScreen === 'ATTRACT') {
+    // handled in tick() -- scripted playback, not real menu input
+  } else if (uiScreen === 'MODESELECT') {
+    if (justPressed('ArrowUp')) { menu.modeIndex = (menu.modeIndex + MODE_LIST.length - 1) % MODE_LIST.length; sfx('menuMove'); }
+    if (justPressed('ArrowDown')) { menu.modeIndex = (menu.modeIndex + 1) % MODE_LIST.length; sfx('menuMove'); }
+    if (justPressed('Enter')) {
+      sfx('menuConfirm');
+      gameMode = MODE_LIST[menu.modeIndex];
+      if (gameMode === 'SHIFT') { uiScreen = 'PLAYERS'; }
+      else { startRun(); }
+    }
+  } else if (uiScreen === 'PLAYERS') {
+    if (justPressed('ArrowLeft')) { shift.numPlayers = Math.max(TUNING.shiftMinPlayers, shift.numPlayers - 1); sfx('menuMove'); }
+    if (justPressed('ArrowRight')) { shift.numPlayers = Math.min(TUNING.shiftMaxPlayers, shift.numPlayers + 1); sfx('menuMove'); }
+    if (justPressed('Enter')) {
+      sfx('menuConfirm');
+      shift.activeIndex = 0;
+      shift.scores = new Array(shift.numPlayers).fill(0);
+      startRun();
+    }
+  } else if (uiScreen === 'SCOREPLATE') {
+    if (justPressed('Enter')) { sfx('menuConfirm'); goTitle(); }
+  } else if (uiScreen === 'SCOREPLATE_NEW') {
+    if (justPressed('Enter')) { sfx('menuConfirm'); uiScreen = 'NAMEENTRY'; }
+  } else if (uiScreen === 'NAMEENTRY') {
+    if (justPressed('ArrowUp')) { nameEntry.cursor = (nameEntry.cursor + 5) % 6; sfx('menuMove'); }
+    if (justPressed('ArrowDown')) { nameEntry.cursor = (nameEntry.cursor + 1) % 6; sfx('menuMove'); }
+    if (justPressed('ArrowLeft') || justPressed('ArrowRight')) {
+      const dir = justPressed('ArrowRight') ? 1 : -1;
+      const cur = nameEntry.chars[nameEntry.cursor];
+      const A = 'A'.charCodeAt(0), Z = 'Z'.charCodeAt(0);
+      let code = cur.charCodeAt(0) + dir;
+      if (code > Z) code = A; if (code < A) code = Z;
+      nameEntry.chars[nameEntry.cursor] = String.fromCharCode(code);
+      sfx('menuMove');
+    }
+    if (justPressed('Enter')) {
+      sfx('menuConfirm');
+      insertHighScore(nameEntry.pendingMode, nameEntry.chars.join(''), nameEntry.pendingScore);
+      goTitle();
+    }
+  } else if (uiScreen === 'SHIFTRESULTS') {
+    if (justPressed('Enter')) {
+      sfx('menuConfirm');
+      const bestScore = Math.max(...shift.scores);
+      if (qualifiesForHighScore('SHIFT', bestScore)) {
+        nameEntry.pendingMode = 'SHIFT';
+        nameEntry.pendingScore = bestScore;
+        nameEntry.chars = ['A','A','A','A','A','A'];
+        nameEntry.cursor = 0;
+        uiScreen = 'NAMEENTRY';
+      } else {
+        goTitle();
+      }
+    }
+  }
+}
+
+
+const STEP = 1 / 60;
+let acc = 0, lastT = performance.now();
+
+// Top-level router: PLAY and ATTRACT run the deterministic fixed-step simulation;
+// every menu screen updates once per real frame (no physics determinism needed there).
+function tick(dt) {
+  if (uiScreen === 'PLAY') {
+    tickPlay(dt);
+  } else if (uiScreen === 'ATTRACT') {
+    if (anyKeyThisFrame) {
+      stopMusic();
+      rng = mulberry32(Date.now() & 0xffffffff); // restore real randomness for actual play
+      goTitle();
+      return;
+    }
+    attract.t += dt;
+    const scripted = attractInputAt(attract.t);
+    keys['ArrowLeft'] = scripted.ArrowLeft;
+    keys['ArrowRight'] = scripted.ArrowRight;
+    keys['ArrowUp'] = scripted.ArrowUp;
+    keys['ArrowDown'] = scripted.ArrowDown;
+    keys['Space'] = scripted.Space;
+    tickPlay(dt);
+    if (game.state === 'DEAD' && deathFreezeT <= -0.8) { // freeze elapsed + a beat to see the death, then loop
+      rng = mulberry32(987654321);
+      resetGame();
+      attract.t = 0;
+    }
+  }
+}
+
+function frame(now) {
+  let frameDt = (now - lastT) / 1000;
+  lastT = now;
+  frameDt = clamp(frameDt, 0, 0.25); // guard against tab-away spikes
+
+  if (uiScreen === 'PLAY' || uiScreen === 'ATTRACT') {
+    acc += frameDt;
+    while (acc >= STEP) {
+      tick(STEP);
+      acc -= STEP;
+    }
+  } else {
+    acc = 0;
+    updateMenus(frameDt);
+  }
+
+  render();
+  snapshotKeyEdges();
+  anyKeyThisFrame = false;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------------------------------------------------------------
+// 9. HEADLESS SELF-TEST (checkpoint 5 scope: full sim including the
+//    shell's tickPlay path -- movement, climbing, boulders, passive
+//    pick, boulder-boulder collisions/pickups, doors/keys/descent,
+//    doorstuck, death/run-ended routing, mode/screen consistency)
+//    Runs once on load, logs to console, does not affect rendering.
+// ---------------------------------------------------------------
+(function selfTest() {
+  try {
+    let errors = 0;
+    let runEnds = 0, restarts = 0, pickupsSeen = 0, descents = 0, doorStucks = 0;
+    const VALID_SCREENS = ['TITLE','MODESELECT','PLAYERS','PLAY','SCOREPLATE','SCOREPLATE_NEW','NAMEENTRY','SHIFTRESULTS','ATTRACT'];
+    gameMode = 'DIG';
+    startRun(); // enters uiScreen='PLAY' via the real shell path, not a raw resetGame()
+    for (let i = 0; i < 20000; i++) {
+      keys['ArrowLeft'] = (i % 37 < 9);
+      keys['ArrowRight'] = (i % 37 >= 9 && i % 37 < 18);
+      keys['ArrowUp'] = (i % 37 >= 18 && i % 37 < 24);
+      keys['ArrowDown'] = (i % 37 >= 24 && i % 37 < 28);
+      keys['Space'] = (i % 11 === 0);
+
+      const depthBefore = game.depth;
+      const screenBefore = uiScreen;
+      tick(STEP);
+      if (game.depth > depthBefore) descents++;
+      if (pete.state === 'DOORSTUCK') doorStucks++;
+      if (uiScreen !== screenBefore && screenBefore === 'PLAY') runEnds++;
+
+      if (pete.x < GEO.wallL - 1 || pete.x > GEO.wallR + 1) errors++;
+      if (pete.floorIdx < 0 || pete.floorIdx >= FLOORS) errors++;
+      if (!isFinite(pete.x) || !isFinite(pete.y)) errors++;
+      for (const b of boulders) {
+        if (b.floorIdx < 0 || b.floorIdx > FLOORS) errors++;
+        if (!isFinite(b.x)) errors++;
+      }
+      for (const p of pickups) {
+        pickupsSeen++;
+        if (!isFinite(p.x) || !isFinite(p.y)) errors++;
+        if (p.y < -50 || p.y > TUNING.bufH + 50) errors++; // way out of bounds, filter should have caught it
+      }
+      if (!VALID_SCREENS.includes(uiScreen)) errors++;
+      if (game.state !== 'PLAY' && game.state !== 'DEAD') errors++;
+      if (game.depth < 0) errors++;
+
+      // whatever screen a run-end landed on, jump straight back into PLAY so the
+      // stress test keeps exercising the simulation rather than sitting in a menu
+      if (uiScreen !== 'PLAY' && uiScreen !== 'ATTRACT') {
+        gameMode = 'DIG';
+        startRun();
+        restarts++;
+      }
+    }
+    keys['ArrowLeft'] = keys['ArrowRight'] = keys['ArrowUp'] = keys['ArrowDown'] = keys['Space'] = false;
+    gameMode = 'DIG';
+    goTitle();
+    console.log(`[ALTURAS PETE self-test] 20000 ticks, ${errors} bounds/NaN/state errors, ` +
+      `${runEnds} run-ends, ${restarts} restarts-into-play, ${descents} descents, ${doorStucks} doorstuck-frames, ` +
+      `${pickupsSeen} pickup-ticks observed.`);
+  } catch (e) {
+    console.error('[ALTURAS PETE self-test] threw:', e);
+  }
+})();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOUTH FORK SATURDAYS</title>
+<meta name="description" content="Six browser games set along the Boise River's South Fork!">
+<style>
+  :root{
+    --ink:#f2ede0;
+    --paper:#070707;
+    --paper-2:#0f0f0f;
+    --line:#2a2a2a;
+    --pink:#ff2f92;
+    --cyan:#29e0e0;
+    --orange:#ff7a1a;
+    --lime:#c6ff3d;
+    --dim:#8a8578;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family: ui-monospace, "SF Mono", "Consolas", "Liberation Mono", monospace;
+    line-height:1.5;
+    padding:2.5rem 1.2rem 4rem;
+  }
+  a{color:var(--cyan);text-decoration:none;border-bottom:1px solid rgba(41,224,224,.35);}
+  a:hover{color:var(--pink);border-color:var(--pink);}
+
+  .wrap{max-width:1100px;margin:0 auto;}
+
+  header{margin-bottom:2rem;}
+  .crumb{font-size:.8rem;letter-spacing:.04em;color:var(--dim);margin-bottom:.6rem;}
+  .crumb a{border-bottom:1px solid rgba(41,224,224,.35);}
+  h1{
+    font-family: Impact, "Arial Narrow Bold", "Arial Black", sans-serif;
+    font-size:2.6rem;
+    letter-spacing:.02em;
+    margin:0 0 .5rem;
+    color:var(--pink);
+    text-shadow: 2px 2px 0 var(--orange), -1px -1px 0 rgba(41,224,224,.4);
+    line-height:1;
+  }
+  nav.subnav{font-size:.85rem;color:var(--dim);}
+  .note{font-size:.78rem;color:var(--dim);margin-top:.7rem;}
+  .cart-dl{font-size:.8rem;margin-top:.4rem;}
+  .cart-dl a{color:var(--lime);border-color:rgba(198,255,61,.4);font-weight:700;}
+  .cart-dl a:hover{color:var(--pink);border-color:var(--pink);}
+  .cart-dl-note{color:var(--dim);margin-left:.3rem;}
+
+  /* ---- play area ---- */
+  .player{
+    border:1px solid var(--line);
+    background:var(--paper-2);
+    margin:2rem 0;
+  }
+  .player-head{
+    display:flex;justify-content:space-between;align-items:baseline;
+    padding:.6rem .9rem;border-bottom:1px solid var(--line);
+    flex-wrap:wrap;gap:.4rem;
+  }
+  .player-head h2{
+    font-family: Impact, "Arial Narrow Bold", "Arial Black", sans-serif;
+    font-size:1.3rem;margin:0;letter-spacing:.02em;color:var(--cyan);font-weight:normal;
+  }
+  .dl-links{font-size:.78rem;}
+  .dl-links a{margin-left:.8rem;}
+  .dl-links .pdx-pending{color:#5a5648;font-style:italic;margin-left:.8rem;}
+  .stage{position:relative;width:100%;aspect-ratio:5/3;background:#000;}
+  .stage iframe{width:100%;height:100%;border:0;display:block;}
+
+  /* ---- box-cover shelf ---- */
+  .rack-label{
+    font-family: Impact, "Arial Narrow Bold", "Arial Black", sans-serif;
+    font-size:1.3rem;letter-spacing:.03em;color:var(--orange);
+    margin:2.6rem 0 1.2rem;text-align:center;
+  }
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+    gap:1.6rem 1.4rem;
+  }
+  .card{
+    cursor:pointer;
+    border:3px solid transparent;
+    border-radius:8px;
+    overflow:hidden;
+    background:#000;
+    transition:border-color .15s ease, transform .12s ease;
+  }
+  .card:hover, .card:focus-visible{border-color:var(--cyan);outline:none;transform:translateY(-4px) scale(1.015);}
+  .card.active{border-color:var(--pink);}
+  .card img{display:block;width:100%;height:auto;}
+  .card .caption{
+    display:flex;justify-content:center;gap:1rem;
+    padding:.5rem .6rem;font-size:.68rem;letter-spacing:.02em;
+    background:var(--paper-2);
+  }
+  .card .caption a{color:var(--cyan);}
+  .card .caption a:hover{color:var(--pink);}
+  .card .caption .pdx-pending{color:#5a5648;font-style:italic;}
+
+  /* ---- seal ---- */
+  footer{margin-top:3.5rem;display:flex;justify-content:center;}
+  .seal{width:96px;height:96px;opacity:.5;transition:opacity .2s ease;}
+  .seal:hover{opacity:.95;}
+  .seal text{font-family:ui-monospace,monospace;fill:var(--dim);}
+  .seal .center{fill:var(--pink);font-weight:bold;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="crumb"><a href="https://ehsaturpentine.github.io/ENGINE/">ENGINE</a> / SOUTH FORK SATURDAYS</div>
+    <h1>SOUTH FORK SATURDAYS</h1>
+    <nav class="subnav">Six games from the Boise River's South Fork!</nav>
+    <div class="note">Best played on desktop with just a keyboard.</div>
+    <div class="cart-dl">
+      <a href="downloads/sfs.pdx.zip" download>DOWNLOAD FULL PLAYDATE CART (.PDX)</a>
+      <span class="cart-dl-note">— 5 games (all but MAILTO!), one cartridge, side-load onto your Playdate</span>
+    </div>
+  </header>
+
+  <section class="player">
+    <div class="player-head">
+      <h2 id="now-playing">MAILTO!</h2>
+      <div class="dl-links" id="now-links"></div>
+    </div>
+    <div class="stage">
+      <iframe id="stage-frame" src="games/mailto.html" title="Now playing"></iframe>
+    </div>
+  </section>
+
+  <div class="rack-label">— PICK A GAME —</div>
+  <section class="grid" id="game-grid"></section>
+
+  <footer>
+    <svg class="seal" viewBox="0 0 100 100" role="img" aria-label="POST TENEBRAS LUX">
+      <circle cx="50" cy="50" r="46" fill="none" stroke="#4a4638" stroke-width="1"/>
+      <a href="mailto:lux_esto@protonmail.com">
+        <text x="50" y="20" font-size="6.2" text-anchor="middle">POST TENEBRAS LUX</text>
+        <text x="50" y="86" font-size="6.2" text-anchor="middle">LUX ESTO UMBRAS FINDENS</text>
+        <text class="center" x="50" y="53" font-size="7.5" text-anchor="middle">TRY. FAIL.</text>
+        <text class="center" x="50" y="61" font-size="7.5" text-anchor="middle">LEARN.</text>
+      </a>
+    </svg>
+  </footer>
+
+</div>
+
+<script>
+const GAMES = [
+  { key:"mailto",     title:"MAILTO!",            file:"games/mailto.html",          card:"images/title_mailto.jpg",  pdx:"browser-only" },
+  { key:"alturas",    title:"ALTURAS PETE!",       file:"games/alturas-pete.html",    card:"images/title_alturas.jpg", pdx:"cart" },
+  { key:"fathom",     title:"THE FATHOMING!",      file:"games/the-fathoming.html",   card:"images/title_fathom.jpg",  pdx:"cart" },
+  { key:"claimjumper",title:"CLAIMJUMPER!",        file:"games/claimjumper.html",     card:"images/title_spear.jpg",   pdx:"cart" },
+  { key:"tailings",   title:"TAILINGS!",           file:"games/tailings.html",        card:"images/title_dredge.jpg",  pdx:"cart" },
+  { key:"vinegar",    title:"P*SS & VINEGAR!",     file:"games/pss-and-vinegar.html", card:"images/title_vinegar.jpg", pdx:"cart" },
+];
+
+const gridEl = document.getElementById('game-grid');
+const stage = document.getElementById('stage-frame');
+const nowPlaying = document.getElementById('now-playing');
+const nowLinks = document.getElementById('now-links');
+
+function linksFor(game){
+  let pdx;
+  if (game.pdx === "cart") {
+    pdx = `<a href="downloads/sfs.pdx.zip" download>DOWNLOAD .PDX (full cart)</a>`;
+  } else {
+    pdx = `<span class="pdx-pending">browser only — not on the Playdate cart</span>`;
+  }
+  return `<a href="${game.file}" download>DOWNLOAD .HTML</a>${pdx}`;
+}
+
+function captionFor(game){
+  let pdx;
+  if (game.pdx === "cart") {
+    pdx = `<a href="downloads/sfs.pdx.zip" download onclick="event.stopPropagation()">.PDX</a>`;
+  } else {
+    pdx = `<span class="pdx-pending">browser only</span>`;
+  }
+  return `<a href="${game.file}" download onclick="event.stopPropagation()">.HTML</a>${pdx}`;
+}
+
+function selectGame(game, cardEl){
+  const allCards = document.querySelectorAll('.card');
+  for (let i = 0; i < allCards.length; i++) { allCards[i].classList.remove('active'); }
+  if (cardEl) cardEl.classList.add('active');
+  stage.src = game.file;
+  nowPlaying.textContent = game.title;
+  nowLinks.innerHTML = linksFor(game);
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+GAMES.forEach(game => {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.tabIndex = 0;
+  card.innerHTML = `
+    <img src="${game.card}" alt="${game.title} box art" loading="lazy">
+    <div class="caption">${captionFor(game)}</div>
+  `;
+  card.addEventListener('click', () => selectGame(game, card));
+  card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGame(game, card); }});
+  gridEl.appendChild(card);
+  game._cardEl = card;
+});
+
+const defaultGame = GAMES.find(g => g.key === 'mailto');
+selectGame(defaultGame, defaultGame._cardEl);
+</script>
+</body>
+</html>

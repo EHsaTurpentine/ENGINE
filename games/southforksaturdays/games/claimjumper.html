@@ -1,0 +1,1724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CLAIMJUMPER!</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0e1424;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Georgia', 'Palatino Linotype', serif;
+    overflow: hidden;
+    color: #f2ead8;
+  }
+  #wrap {
+    position: relative;
+    width: 960px; height: 576px;
+    box-shadow: 0 0 0 5px #241a10, 0 0 0 9px #6b4a2a, 0 0 0 10px #8a6338,
+                0 26px 70px rgba(0,0,0,0.7);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  canvas { display: block; background: #cfe6f2; }
+  #hint {
+    position: absolute; bottom: -36px; left: 0; width: 100%;
+    text-align: center; font-size: 12px; color: #9a8f78; letter-spacing: 0.6px;
+  }
+  #hint b { color: #e8b23c; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="576"></canvas>
+</div>
+<div id="hint">ARROWS/A D MOVE &nbsp;&middot;&nbsp; AIM &uarr;&darr; / W S &nbsp;&middot;&nbsp; HOLD <b>SPACE</b> TO CHARGE, RELEASE TO THROW &nbsp;&middot;&nbsp; BRACE <b>B</b> &nbsp;&middot;&nbsp; SOUND <b>M</b></div>
+<script>
+"use strict";
+
+/* ============================================================
+   CLAIMJUMPER! — browser build
+   v2.0 "THE LONG SEASON" feature pass, built on top of the v1.x
+   single-file build (1,138 lines, ported 1:1 from the hardware-
+   tested Playdate Lua source). This pass adds: lives/credits/
+   continues, a CONDITION damage system split out of BALANCE,
+   platform movement + dodging, a progressive spear-buff system,
+   two repair paths, rebuilt spearfisher/portrait/fish/vinegar-
+   miner art, and the guaranteed bottle-of-vinegar encounter.
+   Self-contained vanilla JS + Canvas. No dependencies.
+   ============================================================ */
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+const DRAW_SCALE = 2.4;
+const LW = 400, LH = 240;
+const W = cv.width, H = cv.height; // 960 x 576
+
+const WATER_Y = 110, BOT_Y = 210, OBS_X = 70, POOL_L = 114, BANK_X = 350;
+const D2R = Math.PI / 180;
+
+// v2: mobile platform range (GDD §3.1) — figure moves within this band
+// instead of standing fixed at OBS_X. OBS_X remains the default/reset
+// starting position (also used at wave start and after a life is lost).
+const PLAYER_MIN = 52, PLAYER_MAX = 92, MOVE_SPEED = 1.1; // logical px/frame @ 30fps = 33px/sec
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function rnd(a, b) { return a + Math.random() * (b - a); }
+function irnd(a, b) { return Math.floor(a + Math.random() * (b - a + 1)); }
+
+// ---------------------------------------------------------------
+// input
+let keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyS','KeyA','KeyD'].includes(e.code)) e.preventDefault();
+  initAudio();
+  if (e.code === 'KeyM') soundOn = !soundOn;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------------------------------------------------------------
+// audio — WebAudio synth helpers in the same spirit as MAILTO's
+// tone()/sweep()/noiseHit(): short square/triangle/sawtooth/noise
+// blips, no samples, no dependencies.
+let actx = null, soundOn = true;
+function initAudio(){ if (!actx) { try { actx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e){} } }
+function tone(freq, dur, type, gain, when, bus){
+  if (!actx || !soundOn) return;
+  const t = (when!==undefined) ? when : actx.currentTime;
+  const o = actx.createOscillator(); const g = actx.createGain();
+  o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(gain,0.001), t+0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g); g.connect(bus||actx.destination);
+  o.start(t); o.stop(t+dur+0.02);
+}
+function sweep(f0, f1, dur, type, gain, when, bus){
+  if (!actx || !soundOn) return;
+  const t = (when!==undefined) ? when : actx.currentTime;
+  const o = actx.createOscillator(); const g = actx.createGain();
+  o.type = type || 'sawtooth';
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(f1,1), t+dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(gain,0.001), t+0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g); g.connect(bus||actx.destination);
+  o.start(t); o.stop(t+dur+0.02);
+}
+let noiseBuf = null;
+function getNoiseBuffer(){
+  if (noiseBuf || !actx) return noiseBuf;
+  const n = actx.sampleRate*0.5;
+  noiseBuf = actx.createBuffer(1, n, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i=0;i<n;i++) d[i] = Math.random()*2-1;
+  return noiseBuf;
+}
+function noiseHit(dur, gain, when, bus, hp){
+  if (!actx || !soundOn) return;
+  const buf = getNoiseBuffer(); if (!buf) return;
+  const t = (when!==undefined) ? when : actx.currentTime;
+  const src = actx.createBufferSource(); src.buffer = buf;
+  const g = actx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  let node = src;
+  if (hp) { const f = actx.createBiquadFilter(); f.type='highpass'; f.frequency.value=hp; node.connect(f); node = f; }
+  node.connect(g); g.connect(bus||actx.destination);
+  src.start(t); src.stop(t+dur+0.02);
+}
+// species/one-shot cues, frequencies ported from SND/playNote calls in the Lua
+function sfxCatch(freq, hdur){ tone(freq, hdur, 'square', 0.22); }
+function sfxCatchExtra(freq){ tone(freq*1.5, 0.08, 'square', 0.16); } // steelhead's second-voice flourish
+function sfxEscape(){ tone(220, 0.15, 'triangle', 0.16); }
+function sfxFizzle(){ tone(160, 0.10, 'triangle', 0.18); }
+function sfxMinerWind(){ tone(300, 0.06, 'triangle', 0.14); }
+function sfxRockHit(){ tone(90, 0.16, 'triangle', 0.24); }
+function sfxMinerHit(){ tone(140, 0.12, 'square', 0.28); tone(220, 0.22, 'sawtooth', 0.22, actx?actx.currentTime+0.02:undefined); }
+function sfxFall(){ tone(200, 0.4, 'square', 0.24); noiseHit(0.3, 0.18); }
+function sfxWaveClear(){ tone(523, 0.10, 'square', 0.20); tone(784, 0.16, 'triangle', 0.16, actx?actx.currentTime+0.06:undefined); }
+function sfxPageTurn(){ tone(500, 0.05, 'triangle', 0.14); }
+
+// --- v2 additions: lives/credits, unlocks, streak, repair, vinegar ---
+function sfxUnlock(){ tone(660,0.08,'square',0.2); tone(880,0.12,'square',0.18, actx?actx.currentTime+0.07:undefined); }
+function sfxBuffOn(){ tone(523,0.06,'square',0.16); tone(784,0.08,'square',0.14, actx?actx.currentTime+0.04:undefined); }
+function sfxStreak(){ tone(784,0.07,'triangle',0.18); tone(988,0.09,'triangle',0.16, actx?actx.currentTime+0.05:undefined); }
+function sfxExtend(){ tone(523,0.1,'square',0.2); tone(659,0.1,'square',0.2, actx?actx.currentTime+0.05:undefined); tone(880,0.16,'square',0.2, actx?actx.currentTime+0.1:undefined); }
+function sfxPatched(){ tone(440,0.12,'triangle',0.2); tone(660,0.14,'triangle',0.18, actx?actx.currentTime+0.06:undefined); }
+function sfxVinegarSpawn(){ sweep(300,90,0.5,'sawtooth',0.2); }
+function sfxVinegarWind(){
+  tone(220,0.15,'triangle',0.16);
+  tone(300,0.15,'triangle',0.16, actx?actx.currentTime+1.0:undefined);
+  tone(400,0.2,'triangle',0.2, actx?actx.currentTime+2.0:undefined);
+}
+function sfxVinegarHit(){ tone(80,0.28,'sawtooth',0.28); noiseHit(0.35,0.2); }
+function sfxKnocked(){ tone(120,0.2,'square',0.22); noiseHit(0.2,0.14); }
+
+// music: same two-loop step-sequencer shape as the Lua (sparse
+// title/wave-intro/end theme; silent everywhere else on purpose —
+// gameplay music was tried and reported as annoying, then cut there).
+function hz(n){ return 440*Math.pow(2,(n-69)/12); }
+const MUS_TITLE = { rate:20, lt:0.7,
+  lead:[57,0,60,0,64,0,60,0, 55,0,59,0,62,0,0,0],
+  bass:[33,0,0,0,40,0,0,0, 29,0,0,0,36,0,0,0] };
+let MUS = { track:null, step:0, timer:0 };
+function musicSet(track){ if (MUS.track !== track) { MUS.track = track; MUS.step = 0; MUS.timer = 0; } }
+function musicTick(){
+  if (!MUS.track || !soundOn || !actx) return;
+  MUS.timer -= 1;
+  if (MUS.timer > 0) return;
+  MUS.timer = MUS.track.rate;
+  const ln = MUS.track.lead[MUS.step % MUS.track.lead.length];
+  const bn = MUS.track.bass[MUS.step % MUS.track.bass.length];
+  const dur = MUS.track.rate/30*MUS.track.lt;
+  if (ln) tone(hz(ln), dur, 'square', 0.10);
+  if (bn) tone(hz(bn), dur*1.4, 'triangle', 0.09);
+  MUS.step++;
+}
+
+// ---------------------------------------------------------------
+// species (ported 1:1 from SPECIES in main.lua)
+const SPECIES = {
+  redband:   { key:'redband',   name:'REDBAND TROUT', band:[10,35], val:1, esc:0.08, len:9,  spd:1.6,  mode:'dart',
+    freq:784, hdur:0.09, note:'Holds in water warmer than most trout can stand.' },
+  bull:      { key:'bull',      name:'BULL TROUT',    band:[55,95], val:2, esc:0.04, len:13, spd:0.30, mode:'hold',
+    freq:392, hdur:0.14, note:'Not a trout at all, but a char. Never left the cold water.' },
+  chinook:   { key:'chinook',   name:'CHINOOK SALMON',band:[30,70], val:4, esc:0.12, len:21, spd:0.75, mode:'cruise',
+    freq:262, hdur:0.20, note:'Came hundreds of miles inland to spawn in these gravels.' },
+  steelhead: { key:'steelhead', name:'STEELHEAD',     band:[10,95], val:6, esc:0.25, len:16, spd:2.3,  mode:'probe',
+    freq:1047,hdur:0.10, note:'A redband that went to sea and came back.' },
+};
+const SPECIES_ORDER = ['redband','bull','chinook','steelhead'];
+
+// waves (ported 1:1 from WAVES in main.lua)
+const WAVES = [
+  { name:'EARLY SEASON',         h:55, jitter:0, poolR:336, target:10, w:{redband:.60,bull:.28,chinook:.12,steelhead:0},    minerFirst:45, gap:[26,32] },
+  { name:'FULL RUN',             h:65, jitter:0, poolR:336, target:12, w:{redband:.55,bull:.25,chinook:.15,steelhead:.05},  minerFirst:32, gap:[22,28] },
+  { name:'PLACER CAMP UPSTREAM', h:72, jitter:2, poolR:336, target:12, w:{redband:.56,bull:.26,chinook:.13,steelhead:.05},  minerFirst:28, gap:[20,26] },
+  { name:'HYDRAULIC SEASON',     h:80, jitter:3, poolR:336, target:12, w:{redband:.60,bull:.26,chinook:.10,steelhead:.04},  minerFirst:24, gap:[18,24] },
+  { name:'CHANNEL DIVERTED',     h:90, jitter:3, poolR:262, target:9,  w:{redband:.60,bull:.28,chinook:.09,steelhead:.03},  minerFirst:22, gap:[17,22] },
+  { name:'THE LAST RUN',         h:95, jitter:3, poolR:300, target:8,  w:{redband:.62,bull:.38,chinook:0,steelhead:0},      minerFirst:20, gap:[16,20] },
+];
+
+// --- v2: the progressive spear — buff catalogue (GDD §4) ---
+const BUFFS = {
+  quickhaft:    { name:'QUICK HAFT',    dur:20 },
+  ironhead:     { name:'IRON HEAD',     dur:20 },
+  leistertines: { name:'LEISTER TINES', dur:20 },
+  searunline:   { name:'SEA-RUN LINE',  dur:15 },
+  pitchtorch:   { name:'PITCH TORCH',   dur:25 },
+  obsidianedge: { name:'OBSIDIAN EDGE', dur:30 },
+};
+// priority order when a drop must choose which buff to activate, and
+// which active buff to refresh once the 2-buff cap is already full
+const BUFF_PRIORITY = ['obsidianedge','searunline','leistertines','ironhead','pitchtorch','quickhaft'];
+function hasBuff(key){ return G.buffsActive.some(b=>b.key===key); }
+
+function pickSpecies(wts){
+  const r = Math.random(); let acc = 0;
+  for (const k in wts) { acc += wts[k]; if (r <= acc) return SPECIES[k]; }
+  return SPECIES.redband;
+}
+
+// ---------------------------------------------------------------
+// throw model — adapted for keyboard. The Playdate build cocks the
+// spear with a reverse crank sweep and fires on the forward stroke,
+// with power set by peak release velocity. Browser has no crank, so
+// this uses a hold-and-release charge instead: hold SPACE to build
+// power over ~0.9s (visually the same pulled-back "COCKED" pose),
+// release to fire at whatever power was reached. Aim angle is set by
+// Up/Down (or W/S) at the same real angular rate as the Playdate
+// D-pad (1.6 deg per 30fps frame = 48 deg/sec), clamped 8-88 exactly
+// as on hardware. Catch radius, power bands, and flight physics below
+// are ported unchanged except where a v2 buff explicitly modifies them.
+const ANGLE_RATE = 48; // deg/sec, matches Playdate's 1.6deg/frame @ 30fps
+const CHARGE_TIME = 0.85; // seconds to reach full power (base; QUICK HAFT shortens this)
+const MIN_POWER = 0.10;   // below this: a fizzled, too-weak throw
+function chargeTime(){ return hasBuff('quickhaft') ? 0.55 : CHARGE_TIME; }
+
+function powerBand(p){
+  if (p < 0.3) return [45, 90, 20, 3];
+  if (p < 0.7) return [80, 150, 32, 6];
+  return [105, 220, 45, 11];
+}
+
+function newSpear(){
+  return { state:'IDLE', angle:48, charge:0, power:0,
+    x:0, y:0, vx:0, vy:0, uw:0, uwRange:0, maxDepth:0,
+    live:false, splashed:false, recov:0 };
+}
+
+// ---------------------------------------------------------------
+// state
+let G = {
+  mode:'TITLE', wave:1, w:WAVES[0], obsY: WATER_Y-WAVES[0].h,
+  t:0,
+  balance:100, condition:4,
+  lives:3, credits:3, extendNext:30, extendsAwarded:0, totalValue:0,
+  livesUsed:0, bestWave:1,
+  cache:{}, total:{}, seen:{}, newlySeen:[],
+  fish:[], miners:[], rocks:[], drops:[], taken:[], sp:null,
+  playerX: OBS_X, playerVX:0, playerMoving:false,
+  shoveX:0, shoveT:0, hitFlash:null, stuck:null, catchFlash:null, minerHit:null,
+  minerTimer:0, spawnTimer:0, spawned:0, fallT:0, fallKind:null,
+  endScroll:0, endStroke:0, tallyPages:[{type:'intro'}], tallyPage:0,
+  minersSpeared:0,
+  buffsAvail:{}, buffsActive:[],
+  streak:0,
+  vinegarWave:null, vinegarSpawned:false, vinegarKilled:false,
+  vinegarSecondPlanned:false, vinegarSecondUsed:false,
+  banner:null,
+  portraitFlinch:0,
+  continueT:0,
+};
+let prevSpace = false, prevA = false;
+
+function buildTallyPages(){
+  const pages = [{type:'intro'}];
+  for (const k of SPECIES_ORDER) if ((G.cache[k]||0) > 0) pages.push({type:'species', key:k});
+  pages.push({type:'summary'});
+  G.tallyPages = pages; G.tallyPage = 0;
+}
+function enterTally(){ G.mode='TALLY'; G.t=0; buildTallyPages(); }
+
+// --- v2: vinegar-wave scheduling (GDD §7.1) ---
+function scheduleVinegar(){
+  const opts = [3,4,5,6].filter(w=>w>=G.wave);
+  G.vinegarWave = opts.length ? opts[irnd(0,opts.length-1)] : clamp(G.wave,3,6);
+  G.vinegarSpawned = false;
+}
+
+function startWave(){
+  G.w = WAVES[G.wave-1];
+  G.obsY = WATER_Y - G.w.h;
+  G.balance = 100;
+  G.condition = 4;
+  G.fish=[]; G.miners=[]; G.rocks=[]; G.drops=[]; G.taken=[];
+  G.sp = newSpear();
+  G.playerX = OBS_X; G.playerVX = 0; G.playerMoving = false;
+  G.shoveX=0; G.shoveT=0; G.hitFlash=null; G.stuck=null; G.catchFlash=null; G.minerHit=null;
+  G.cache = {}; G.newlySeen = [];
+  G.spawnTimer = 30; G.spawned = 0;
+  G.minerTimer = G.w.minerFirst*30;
+  G.banner = null;
+  if (G.wave===6) G.vinegarSecondPlanned = Math.random()<0.15; // GDD §7.1 optional stretch
+  G.mode='WAVEINTRO'; G.t=0;
+}
+function startRun(){
+  G.wave=1; G.total={}; G.seen={};
+  G.lives=3; G.credits=3; G.extendNext=30; G.extendsAwarded=0; G.totalValue=0;
+  G.livesUsed=0; G.bestWave=1;
+  G.minersSpeared=0;
+  G.buffsAvail={}; G.buffsActive=[];
+  G.streak=0;
+  G.vinegarKilled=false; G.vinegarSecondUsed=false; G.vinegarSecondPlanned=false;
+  scheduleVinegar();
+  startWave();
+}
+
+// --- v2: resume behaviour after a life is lost (GDD §1.3) — the
+// current wave, spawned/cache/total/seen, and live fish all carry
+// over untouched; condition/balance/miners/rocks/spear/buffs/streak
+// reset, and the wave is not restarted.
+function resumeWave(){
+  G.condition = 4;
+  G.balance = 100;
+  G.miners = []; G.rocks = []; G.drops = [];
+  G.minerTimer = G.w.gap[0]*30; // brief grace window, not minerFirst
+  G.sp = newSpear();
+  G.playerX = OBS_X; G.playerVX = 0; G.playerMoving = false;
+  G.shoveX=0; G.shoveT=0; G.hitFlash=null; G.stuck=null; G.catchFlash=null; G.minerHit=null;
+  G.buffsActive = [];
+  G.streak = 0;
+  G.banner = null;
+}
+
+// ---------------------------------------------------------------
+// fish
+function spawnFish(){
+  const s = pickSpecies(G.w.w);
+  const d = rnd(s.band[0], s.band[1]);
+  return {
+    s, fx: rnd(POOL_L+16, G.w.poolR-16), fy: WATER_Y+d,
+    vx: (Math.random()<0.5?-1:1)*s.spd*rnd(0.6,1), vy:0,
+    turn: irnd(30,60), burst: irnd(120,320), run:0, escT: irnd(90,150), dead:false,
+  };
+}
+function updateFish(f){
+  const s = f.s;
+  const L = POOL_L+10, R = G.w.poolR-10;
+  const top = WATER_Y+s.band[0], bot = WATER_Y+s.band[1];
+  if (s.mode==='dart'){
+    f.turn -= 1;
+    if (f.turn<=0){ f.turn=irnd(30,60); f.vx=(Math.random()<0.5?-1:1)*s.spd*rnd(0.6,1.3); f.vy=rnd(-0.5,0.5); }
+  } else if (s.mode==='hold'){
+    f.vx *= 0.94; f.vy *= 0.9;
+    f.burst -= 1;
+    if (f.burst<=0){ f.burst=irnd(200,420); f.vx=(Math.random()<0.5?-1:1)*s.spd*7; }
+    if (f.fy < bot-6) f.vy += 0.05;
+  } else if (s.mode==='cruise'){
+    f.burst -= 1;
+    if (f.burst<=0){ f.burst=irnd(150,300); f.vx=(f.vx>=0?1:-1)*s.spd*4; }
+    f.vx = lerp(f.vx, (f.vx>=0?1:-1)*s.spd, 0.06);
+    if (f.run>0) { f.run -= 1; f.vx = 2.2; }
+    else if (Math.random()<0.0022 && G.mode==='PLAY') f.run = 200;
+  } else if (s.mode==='probe'){
+    const tx = lerp(L,R,0.5), ty = f.fy;
+    f.vx = lerp(f.vx, (tx-f.fx)>=0?s.spd:-s.spd, 0.08);
+    f.vy = lerp(f.vy, clamp((ty-f.fy)*0.05,-1.4,1.4), 0.1);
+  }
+  f.fx += f.vx; f.fy += f.vy;
+  if (f.fx<L) { f.fx=L; f.vx=Math.abs(f.vx); }
+  if (f.fx>R) { f.fx=R; f.vx=-Math.abs(f.vx); }
+  if (f.fy<top) { f.fy=top; f.vy=Math.abs(f.vy)*0.5; }
+  if (f.fy>bot) { f.fy=bot; f.vy=-Math.abs(f.vy)*0.5; }
+  f.escT -= 1;
+  if (f.escT<=0){
+    f.escT = 150;
+    if (Math.random() < f.s.esc){ f.dead=true; f.escaped=true; if (G.mode==='PLAY') sfxEscape(); }
+  }
+}
+
+// ---------------------------------------------------------------
+// v2: platform movement (GDD §3) — cannot move while cocked, braced,
+// or recovering; moving costs balance on top of the passive drain.
+function updateMovement(){
+  const sp = G.sp;
+  const locked = sp.state==='COCKED' || sp.state==='RECOVERING' || !!keys['KeyB'];
+  let moving = false;
+  if (!locked){
+    if (keys['ArrowLeft'] || keys['KeyA']) { G.playerX -= MOVE_SPEED; G.playerVX = -MOVE_SPEED; moving = true; }
+    else if (keys['ArrowRight'] || keys['KeyD']) { G.playerX += MOVE_SPEED; G.playerVX = MOVE_SPEED; moving = true; }
+    else G.playerVX = 0;
+  } else {
+    G.playerVX = 0;
+  }
+  G.playerX = clamp(G.playerX, PLAYER_MIN, PLAYER_MAX);
+  if (moving) G.balance -= 0.4/30;
+  return moving;
+}
+
+// ---------------------------------------------------------------
+// throw / spear flight (ported from updateThrow/fire/updateSpearFlight)
+function updateThrow(dt){
+  const sp = G.sp;
+  const braced = !!keys['KeyB'];
+
+  if (keys['ArrowUp']   || keys['KeyW']) sp.angle -= ANGLE_RATE*dt;
+  if (keys['ArrowDown'] || keys['KeyS']) sp.angle += ANGLE_RATE*dt;
+  sp.angle = clamp(sp.angle, 8, 88);
+
+  if (sp.live || sp.state==='RECOVERING'){ sp.charge=0; return; }
+  if (braced){ sp.charge=0; sp.state='IDLE'; return; }
+
+  const spaceDown = !!keys['Space'];
+  if (spaceDown){
+    sp.state = 'COCKED';
+    sp.charge = clamp(sp.charge + dt/chargeTime(), 0, 1);
+  } else if (sp.state==='COCKED' && !spaceDown){
+    fire(sp.charge);
+  }
+}
+function fire(power){
+  const sp = G.sp;
+  sp.charge = 0;
+  if (power < MIN_POWER){
+    G.balance -= 3;
+    G.stuck = { x:G.playerX+14, y:WATER_Y+8, t:24 };
+    sp.state='RECOVERING'; sp.recov=20;
+    sfxFizzle();
+    G.streak = 0; // fizzles count as a miss (GDD §5.2)
+    return;
+  }
+  const err = clamp((1-power)*4, 0, 4);
+  const a = clamp(sp.angle + rnd(-err,err), 6, 88);
+  let [depth, range, recov, cost] = powerBand(power);
+  if (hasBuff('quickhaft'))    recov = Math.round(recov*0.6);
+  if (hasBuff('ironhead'))     { depth = Math.round(depth*1.4); range = Math.round(range*1.4); }
+  if (hasBuff('obsidianedge')) cost = (cost===3) ? 2 : (cost===6 ? 3 : 6);
+  sp.power = power;
+  sp.x = G.playerX+G.shoveX+4; sp.y = G.obsY-2;
+  sp.vx = Math.cos(a*D2R)*9; sp.vy = Math.sin(a*D2R)*9;
+  sp.uw = 0; sp.splashed=false; sp.uwRange=range; sp.maxDepth=depth;
+  sp.live=true; sp.recov=recov; sp.state='FLIGHT';
+  G.balance -= cost;
+}
+function endFlight(x,y,stick,isMiss){
+  const sp = G.sp;
+  sp.live=false;
+  if (hasBuff('searunline')){ sp.state='IDLE'; sp.charge=0; } // no RECOVERING state
+  else sp.state='RECOVERING';
+  if (stick) G.stuck = {x,y,t:40};
+  if (isMiss) G.streak = 0;
+}
+
+// --- v2: repair paths (GDD §5) ---
+function checkExtend(val){
+  G.totalValue = (G.totalValue||0) + val;
+  while (G.totalValue >= G.extendNext && G.extendsAwarded < 5){
+    G.lives += 1;
+    G.extendsAwarded += 1;
+    G.extendNext += 30;
+    G.banner = {text:'EXTEND!', t:60};
+    sfxExtend();
+  }
+}
+function handleStreak(){
+  if (G.streak===3){ G.balance=Math.min(100,G.balance+15); G.banner={text:'CLEAN \u2014 3', t:50}; sfxStreak(); }
+  else if (G.streak===5){ G.condition=Math.min(4,G.condition+1); G.banner={text:'DEAD EYE \u2014 5', t:50}; sfxStreak(); }
+  else if (G.streak===8){ G.condition=Math.min(4,G.condition+1); G.lives+=1; G.banner={text:'UNERRING \u2014 8', t:50}; sfxStreak(); }
+  else if (G.streak>8 && (G.streak-8)%4===0){ G.condition=Math.min(4,G.condition+1); G.banner={text:'STREAK '+G.streak, t:50}; sfxStreak(); }
+}
+
+// --- v2: weapon unlocks (GDD §4) ---
+function announceUnlock(key){
+  G.buffsAvail[key] = true;
+  G.banner = {text:'UNLOCKED \u2014 '+BUFFS[key].name, t:60};
+  sfxUnlock();
+}
+function checkUnlocks(){
+  if (!G.buffsAvail.quickhaft    && (G.total.redband||0)>=8)  announceUnlock('quickhaft');
+  if (!G.buffsAvail.ironhead     && (G.total.bull||0)>=5)     announceUnlock('ironhead');
+  if (!G.buffsAvail.leistertines && (G.total.chinook||0)>=3)  announceUnlock('leistertines');
+  if (!G.buffsAvail.searunline   && (G.total.steelhead||0)>=2) announceUnlock('searunline');
+  if (!G.buffsAvail.pitchtorch   && G.minersSpeared>=5)        announceUnlock('pitchtorch');
+  if (!G.buffsAvail.obsidianedge && G.minersSpeared>=12)       announceUnlock('obsidianedge');
+}
+function activateBestAvailableBuff(){
+  for (const key of BUFF_PRIORITY){
+    if (G.buffsAvail[key] && !hasBuff(key)){
+      if (G.buffsActive.length < 2){
+        G.buffsActive.push({key, timer:BUFFS[key].dur*30});
+        G.banner = {text: BUFFS[key].name+' READY', t:50};
+      } else {
+        let target = G.buffsActive[0];
+        for (const b of G.buffsActive) if (b.timer < target.timer) target = b;
+        target.timer = BUFFS[target.key].dur*30;
+        G.banner = {text: BUFFS[target.key].name+' RENEWED', t:50};
+      }
+      sfxBuffOn();
+      return;
+    }
+  }
+}
+function activateAllAvailableBuffs(){
+  for (const key of BUFF_PRIORITY){
+    if (G.buffsAvail[key] && !hasBuff(key) && G.buffsActive.length<2){
+      G.buffsActive.push({key, timer:BUFFS[key].dur*30});
+      sfxBuffOn();
+    }
+  }
+}
+function updateDrops(){
+  const keep=[];
+  for (const d of G.drops){
+    d.t += 1;
+    if (d.t >= d.dur){ activateBestAvailableBuff(); continue; }
+    keep.push(d);
+  }
+  G.drops = keep;
+}
+
+function catchFish(f){
+  const sp = G.sp;
+  f.dead = true;
+  const k = f.s.key;
+  G.cache[k] = (G.cache[k]||0)+1;
+  G.total[k] = (G.total[k]||0)+1;
+  // GDD §5.1: redband restores the baseline only; other species add a bonus
+  // on top, OBSIDIAN EDGE raises the baseline itself
+  let restore = hasBuff('obsidianedge') ? 8 : 5;
+  if (k==='bull') restore += 10;
+  else if (k==='chinook') restore += 20;
+  else if (k==='steelhead') restore += 20;
+  G.balance = Math.min(100, G.balance+restore);
+  if (k==='steelhead' && G.condition < 4){
+    G.condition = Math.min(4, G.condition+1);
+    G.banner = {text:'PATCHED UP', t:50};
+    sfxPatched();
+  }
+  G.hitFlash = {x:f.fx, y:f.fy, t:10};
+  sp.live=false;
+  if (hasBuff('searunline')){ sp.state='IDLE'; sp.charge=0; } else sp.state='RECOVERING';
+  sfxCatch(f.s.freq, f.s.hdur);
+  if (k==='steelhead') sfxCatchExtra(f.s.freq);
+  G.catchFlash = {name:f.s.name, t:42};
+  if (!G.seen[k]){ G.seen[k]=true; G.newlySeen.push(k); }
+  checkUnlocks();
+  checkExtend(f.s.val);
+  G.streak += 1;
+  handleStreak();
+}
+function updateSpearFlight(){
+  const sp = G.sp;
+  if (!sp.live) return;
+  const steps = 3;
+  for (let i=0;i<steps;i++){
+    sp.x += sp.vx/steps; sp.y += sp.vy/steps;
+    const under = sp.y > WATER_Y;
+    if (under) sp.uw += Math.sqrt(sp.vx*sp.vx+sp.vy*sp.vy)/steps;
+
+    // PITCH TORCH: the flame passing near a winding miner spoils his throw
+    if (hasBuff('pitchtorch')){
+      for (const m of G.miners){
+        if (m.state==='wind' && Math.abs(m.x-sp.x) < 16 && sp.y>WATER_Y-24 && sp.y<WATER_Y+4){
+          m.state='stand'; m.t = irnd(90,140); m.arm=0;
+        }
+      }
+    }
+
+    if (!under && sp.x > BANK_X-8){
+      for (const m of G.miners){
+        if (m.state!=='gone' && Math.abs(m.x-sp.x)<9 && sp.y>WATER_Y-20 && sp.y<WATER_Y+2){
+          const wasVinegar = m.type==='vinegar';
+          let goneT = (m.type==='jumper') ? 450 : 360;
+          if (hasBuff('pitchtorch')) goneT *= 2;
+          m.state='gone'; m.t = goneT;
+          G.minerHit = {x:m.x, y:WATER_Y-10, t:16};
+          sfxMinerHit();
+          G.minersSpeared += 1;
+          checkUnlocks();
+          if (wasVinegar){
+            // GDD §7.3: spearing the vinegar miner first is the big reward
+            G.vinegarKilled = true;
+            G.condition = Math.min(4, G.condition+1);
+            G.lives += 1;
+            activateAllAvailableBuffs();
+            G.banner = {text:'VINEGAR MINER DOWN', t:60};
+            sfxExtend();
+          } else if (Math.random() < 0.45){
+            G.drops.push({x:m.x, y:WATER_Y-10, tx:G.playerX, ty:G.obsY-4, t:0, dur:30});
+          }
+          endFlight(sp.x, sp.y, false, false); // doesn't break streak, doesn't advance it
+          return;
+        }
+      }
+    }
+    if (under){
+      sp.splashed = true;
+      for (const f of G.fish){
+        if (!f.dead){
+          const dx=f.fx-sp.x, dy=f.fy-sp.y;
+          const rad = hasBuff('leistertines') ? (15+f.s.len*0.6) : (9+f.s.len*0.45);
+          if (Math.sqrt(dx*dx+dy*dy) < rad){ catchFish(f); return; }
+        }
+      }
+      if (sp.uw >= sp.uwRange || (sp.y-WATER_Y) >= sp.maxDepth || sp.y > BOT_Y-2){
+        endFlight(sp.x, Math.min(sp.y, BOT_Y-2), true, true); return;
+      }
+    }
+    if (sp.x > 398 || sp.y > BOT_Y+24){ endFlight(sp.x, sp.y, false, true); return; }
+  }
+}
+
+// ---------------------------------------------------------------
+// miners (ported from spawnMiner/throwRock/takeFish/updateMiners/updateRocks)
+function spawnMiner(){
+  if (G.miners.length >= 4) return;
+  let rocks = 0;
+  for (const m of G.miners) if (m.type==='rock' && m.state!=='gone') rocks++;
+  const kind = (rocks>=2) ? 'jumper' : (Math.random()<0.6 ? 'rock' : 'jumper');
+  const tx = (kind==='rock') ? rnd(356,392) : rnd(352,372);
+  G.miners.push({ type:kind, x:404, tx, state:'walk', t:0, arm:0 });
+}
+// --- v2: the vinegar miner (GDD §7) ---
+function maybeSpawnVinegar(){
+  if (G.wave===G.vinegarWave && !G.vinegarSpawned && G.spawned >= G.w.target/2){
+    G.vinegarSpawned = true;
+    return true;
+  }
+  if (G.wave===6 && G.vinegarSpawned && G.vinegarSecondPlanned && !G.vinegarSecondUsed){
+    G.vinegarSecondUsed = true;
+    return true;
+  }
+  return false;
+}
+function spawnVinegarMiner(){
+  if (G.miners.length >= 4) return;
+  G.miners.push({ type:'vinegar', x:404, tx: rnd(352,372), state:'walk', t:0, arm:0 });
+  G.banner = {text:'SOMETHING IN HIS HAND CATCHES THE LIGHT', t:45};
+  sfxVinegarSpawn();
+}
+// v2: rocks (and the vinegar bottle) lead the player instead of
+// targeting a fixed point (GDD §3.4) — early miners throw where you
+// are, late miners throw where you're going.
+function computeTargetX(){
+  const idx = G.wave-1;
+  const leadAcc = lerp(0.3, 0.8, idx/(WAVES.length-1));
+  const scatter = lerp(10, 4, idx/(WAVES.length-1));
+  return G.playerX + G.playerVX*10*leadAcc + rnd(-scatter, scatter);
+}
+function throwRock(m){
+  const T=42, g=0.36;
+  const tx = clamp(computeTargetX(), PLAYER_MIN-6, PLAYER_MAX+6), ty=G.obsY-2;
+  const x=m.x-4, y=WATER_Y-16;
+  G.rocks.push({ x, y, vx:(tx-x)/T, vy:(ty-y)/T-0.5*g*T, g });
+}
+function throwBottle(m){
+  const T=50, g=0.30; // slightly slower flight than a rock (GDD §7.2)
+  const tx = clamp(computeTargetX(), PLAYER_MIN-6, PLAYER_MAX+6), ty=G.obsY-2;
+  const x=m.x-4, y=WATER_Y-16;
+  G.rocks.push({ x, y, vx:(tx-x)/T, vy:(ty-y)/T-0.5*g*T, g, kind:'vinegar', rot:0 });
+}
+function takeFish(m){
+  const live = G.fish.filter(f=>!f.dead);
+  if (!live.length) return;
+  live.sort((a,b)=>Math.abs(a.fx-m.x)-Math.abs(b.fx-m.x));
+  const f = live[0];
+  f.dead = true;
+  G.taken.push({ x:f.fx, y:f.fy, tx:m.x, s:f.s, t:0 });
+}
+function updateMiners(){
+  G.minerTimer -= 1;
+  if (G.minerTimer <= 0){
+    if (maybeSpawnVinegar()) spawnVinegarMiner();
+    else spawnMiner();
+    G.minerTimer = irnd(G.w.gap[0],G.w.gap[1])*30;
+  }
+  for (const m of G.miners){
+    if (m.state==='gone'){
+      m.t -= 1; if (m.t<=0){ m.state='walk'; m.x=404; }
+    } else if (m.state==='walk'){
+      m.x -= (m.type==='vinegar') ? 0.6 : 0.9; // vinegar miner approaches slower (GDD §6.3)
+      if (m.x <= m.tx){
+        m.state='stand';
+        m.t = (m.type==='rock') ? 40 : (m.type==='vinegar' ? 55 : 110);
+      }
+    } else if (m.type==='rock'){
+      if (m.state==='stand'){
+        m.t -= 1;
+        if (m.t<=0){ m.state='wind'; m.t=45; sfxMinerWind(); }
+      } else if (m.state==='wind'){
+        m.arm = 1-(m.t/45);
+        m.t -= 1;
+        if (m.t<=0){ throwRock(m); m.state='stand'; m.t=irnd(90,140); m.arm=0; }
+      }
+    } else if (m.type==='vinegar'){
+      if (m.state==='stand'){
+        m.t -= 1;
+        if (m.t<=0){ m.state='wind'; m.t=75; sfxVinegarWind(); } // GDD §7.2: 75-frame windup
+      } else if (m.state==='wind'){
+        m.arm = 1-(m.t/75);
+        m.t -= 1;
+        if (m.t<=0){ throwBottle(m); m.state='stand'; m.t=irnd(90,140); m.arm=0; }
+      }
+    } else { // jumper
+      if (m.state==='stand'){
+        m.t -= 1;
+        if (m.t<=0){ m.t=180; takeFish(m); }
+      }
+    }
+  }
+}
+function updateRocks(){
+  const braced = !!keys['KeyB'];
+  const keep = [];
+  for (const r of G.rocks){
+    r.vy += r.g; r.x += r.vx; r.y += r.vy;
+    let hit = false;
+    if (r.x < G.playerX+16 && r.x > G.playerX-10 && r.y > G.obsY-14 && r.y < G.obsY+16){
+      hit = true;
+      if (r.kind==='vinegar'){
+        onVinegarHit(); // brace does NOT help (GDD §7.3)
+      } else if (!braced){
+        G.condition -= 1;
+        G.shoveX = -rnd(6,10); G.shoveT = 30;
+        G.portraitFlinch = 12;
+        sfxRockHit();
+        const sp = G.sp;
+        if (sp.state==='COCKED') { sp.charge = Math.max(0, sp.charge*0.4); }
+        if (G.condition<=0) onLifeLost('knocked');
+      } else {
+        G.balance -= 8; // bracing negates the hit but isn't free (GDD §2.1)
+      }
+    }
+    if (r.y > LH+10 || r.x < -10) hit = true;
+    if (!hit) keep.push(r);
+  }
+  G.rocks = keep;
+}
+
+// --- v2: lives / life-lost handling (GDD §1) ---
+function onVinegarHit(){
+  G.condition = 0;
+  G.shoveX = -rnd(6,10); G.shoveT = 30;
+  onLifeLost('vinegar');
+}
+function onLifeLost(kind){
+  if (G.mode !== 'PLAY') return; // guard against double-trigger in one tick
+  G.lives -= 1;
+  G.livesUsed += 1;
+  G.fallKind = kind;
+  G.buffsActive = []; // active buffs are cancelled on death (GDD §1.3/§4.4)
+  G.streak = 0;
+  G.mode = 'LIFELOST'; G.fallT = 0;
+  if (kind==='vinegar') sfxVinegarHit();
+  else if (kind==='knocked') sfxKnocked();
+  else sfxFall();
+}
+
+// ---------------------------------------------------------------
+// phase update — 30 ticks/sec, matching the Playdate build's fixed
+// 30fps refresh rate exactly (see main loop below), so every frame
+// count and per-frame constant above carries over unchanged.
+const TICK_DT = 1/30;
+function updatePlay(){
+  const dt = TICK_DT;
+  if (G.catchFlash){ G.catchFlash.t -= 1; if (G.catchFlash.t<=0) G.catchFlash=null; }
+  if (G.shoveT>0){ G.shoveT -= 1; if (G.shoveT<=0) G.shoveX=0; }
+  if (G.portraitFlinch>0) G.portraitFlinch -= 1;
+
+  if (G.spawned < G.w.target){
+    G.spawnTimer -= 1;
+    if (G.spawnTimer<=0){ G.fish.push(spawnFish()); G.spawned += 1; G.spawnTimer = 55 + Math.floor(G.t/50); }
+  }
+
+  let running = false;
+  const keep = [];
+  for (const f of G.fish){
+    if (!f.dead){
+      updateFish(f);
+      if (f.run && f.run>0) running = true;
+      if (!f.dead) keep.push(f);
+    }
+  }
+  G.fish = keep;
+
+  G.playerMoving = updateMovement();
+  updateThrow(dt);
+  if (G.sp.live) updateSpearFlight();
+  else if (G.sp.state==='RECOVERING'){
+    G.sp.recov -= 1;
+    if (G.sp.recov<=0){ G.sp.state='IDLE'; G.sp.charge=0; }
+  }
+
+  updateMiners();
+  updateRocks();
+  updateDrops();
+
+  G.buffsActive = G.buffsActive.filter(b => { b.timer -= 1; return b.timer > 0; });
+
+  const braced = !!keys['KeyB'];
+  G.balance -= (running?0.30:0.15)/30;
+  if (braced && !G.sp.live && G.sp.state!=='RECOVERING') G.balance += 3/30;
+  G.balance = clamp(G.balance, 0, 100);
+  G.condition = clamp(G.condition, 0, 4);
+
+  if (G.stuck){ G.stuck.t -= 1; if (G.stuck.t<=0) G.stuck=null; }
+  if (G.hitFlash){ G.hitFlash.t -= 1; if (G.hitFlash.t<=0) G.hitFlash=null; }
+  if (G.minerHit){ G.minerHit.t -= 1; if (G.minerHit.t<=0) G.minerHit=null; }
+  if (G.banner){ G.banner.t -= 1; if (G.banner.t<=0) G.banner=null; }
+  G.taken = G.taken.filter(t => { t.t += 1; return t.t < 50; });
+
+  if (G.balance<=0){
+    onLifeLost('went-in');
+    return;
+  }
+  if (G.spawned>=G.w.target && G.fish.length===0){
+    sfxWaveClear();
+    enterTally();
+  }
+}
+
+// ---------------------------------------------------------------
+// text helpers
+function ctext(s, y, opt){
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = (opt&&opt.font) || '13px Georgia';
+  ctx.fillStyle = (opt&&opt.color) || '#2b1d10';
+  ctx.fillText(s, LW/2, y);
+  ctx.restore();
+}
+function rtext(s, rightX, y, opt){
+  ctx.save();
+  ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+  ctx.font = (opt&&opt.font) || '13px Georgia';
+  ctx.fillStyle = (opt&&opt.color) || '#2b1d10';
+  ctx.fillText(s, rightX, y);
+  ctx.restore();
+}
+// bold headline text, embossed the way MAILTO's actual title screen
+// does it (dark offset shadow + main fill + gold stroke), using a
+// real bold canvas font.
+function boldCText(s, y, size){
+  size = size || 26;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `bold ${size}px Georgia`;
+  ctx.fillStyle = 'rgba(30,18,8,0.45)';
+  ctx.fillText(s, LW/2+1, y+1.4);
+  ctx.fillStyle = '#2b1d10';
+  ctx.fillText(s, LW/2, y);
+  ctx.lineWidth = 0.6; ctx.strokeStyle = 'rgba(232,178,60,0.55)';
+  ctx.strokeText(s, LW/2, y);
+  ctx.restore();
+}
+function wrapText(s, cx, y, maxW, lh, opt){
+  ctx.save();
+  ctx.textAlign='center'; ctx.font = (opt&&opt.font) || '11px Georgia';
+  ctx.fillStyle = (opt&&opt.color) || '#4a3a26';
+  const words = s.split(' ');
+  let line='', ly=y;
+  for (const w of words){
+    const test = line+w+' ';
+    if (ctx.measureText(test).width>maxW && line){ ctx.fillText(line.trim(), cx, ly); line=w+' '; ly+=lh; }
+    else line = test;
+  }
+  ctx.fillText(line.trim(), cx, ly);
+  ctx.restore();
+}
+function dashedLine(x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1, d=Math.sqrt(dx*dx+dy*dy);
+  if (d<1) return;
+  const ux=dx/d, uy=dy/d, step=6;
+  ctx.beginPath();
+  for (let t=0; t<d; t+=step){
+    const a = Math.min(t+3,d);
+    ctx.moveTo(x1+ux*t, y1+uy*t); ctx.lineTo(x1+ux*a, y1+uy*a);
+  }
+  ctx.stroke();
+}
+
+// ---------------------------------------------------------------
+// palette — MAILTO!'s actual warm earthy hex family. v2 adds two
+// colours: bloodDk (portrait damage only) and glassGrn (the vinegar
+// bottle), per GDD §6.4 — no other new colours.
+const PAL = {
+  ink:'#2b1d10', cream:'#f2ead8', gold:'#e8b23c', gold2:'#e8d24a',
+  rockDk:'#3a2a1c', rockMd:'#6b4a2a', rockLt:'#8a6338',
+  waterDp:'#2f5064', waterLt:'#5c93ab', waterFoam:'rgba(242,234,216,0.5)',
+  sky1:'#e8c896', sky2:'#f0d9a8', sky3:'#f6ecc8',
+  wood:'#6b4a2a', woodDk:'#4a3018',
+  bloodDk:'#7a2418', glassGrn:'#4a6b52',
+};
+
+// ---------------------------------------------------------------
+// scene drawing (ported from drawCanyon/drawWater/drawFishShape/
+// drawSpear/drawMiner/drawPlay etc, redrawn with MAILTO's actual
+// paint-facet technique instead of Playdate's 1-bit line/fill calls)
+function drawSky(){
+  const g = ctx.createLinearGradient(0,0,0,WATER_Y);
+  g.addColorStop(0, PAL.sky1); g.addColorStop(0.5, PAL.sky2); g.addColorStop(1, PAL.sky3);
+  ctx.fillStyle = g; ctx.fillRect(0,0,LW,WATER_Y+4);
+}
+function drawCanyonWalls(){
+  ctx.fillStyle = PAL.rockMd;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(46,0); ctx.lineTo(20,38); ctx.lineTo(0,34); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(20,0); ctx.lineTo(8,20); ctx.lineTo(0,18); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = PAL.rockMd;
+  ctx.beginPath(); ctx.moveTo(LW,0); ctx.lineTo(LW-30,0); ctx.lineTo(LW-10,30); ctx.lineTo(LW,28); ctx.closePath(); ctx.fill();
+}
+function drawWater(l, r, top, bot, t){
+  const g = ctx.createLinearGradient(0, top, 0, bot);
+  g.addColorStop(0, PAL.waterLt); g.addColorStop(1, PAL.waterDp);
+  ctx.fillStyle = g;
+  ctx.fillRect(l, top, r-l, bot-top);
+  // rippled surface line, painted not just stroked flat
+  ctx.strokeStyle = PAL.waterFoam; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  let prevx=null, prevy=0;
+  for (let x=l; x<=r; x+=3){
+    const y = top + Math.sin(x*0.11 + t*0.09)*1.2;
+    if (prevx!==null) { ctx.moveTo(prevx,prevy); ctx.lineTo(x,y); }
+    prevx=x; prevy=y;
+  }
+  ctx.stroke();
+  // faint scattered glints
+  for (let i=0;i<10;i++){
+    const gx = l + ((i*97 + Math.floor(t*0.6)) % Math.max(1,(r-l)));
+    const gy = top + 6 + ((i*53) % Math.max(1,(bot-top-12)));
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(gx, gy, 3, 1);
+  }
+}
+function drawBank(l, top, w, h){
+  ctx.fillStyle = PAL.rockLt;
+  ctx.fillRect(l, top, w, h);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fillRect(l, top, w, 5);
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.fillRect(l, top+h-4, w, 4);
+}
+
+function drawPlatform(oy){
+  ctx.strokeStyle = PAL.woodDk; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(48, oy+3); ctx.lineTo(44, 218); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(88, oy+3); ctx.lineTo(92, 218); ctx.stroke();
+  ctx.strokeStyle = 'rgba(74,48,24,0.6)'; ctx.lineWidth = 1;
+  for (let y=oy+16; y<216; y+=22){
+    const t=(y-oy)/(218-oy);
+    ctx.beginPath(); ctx.moveTo(lerp(48,44,t),y); ctx.lineTo(lerp(88,92,t),y+3); ctx.stroke();
+  }
+  ctx.fillStyle = PAL.wood;
+  ctx.fillRect(42, oy+2, 58, 3);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fillRect(42, oy+2, 58, 1);
+}
+
+// v2: the spearfisher rebuilt with connected arms (rear arm cocks
+// back during charge, lead arm points along the aim line), a walk
+// cycle while moving, and posture/tunic damage states matching the
+// portrait's CONDITION table (GDD §6.1).
+function drawFigure(ox, oy, braced, moving, aimAngle, spState, chargeK){
+  const cond = G.condition;
+  const stoop = cond<=1 ? 1.6 : (cond===2 ? 0.8 : 0);
+  const walkPhase = moving ? (Math.floor(G.t/5)%2) : 0;
+  ctx.save();
+  ctx.translate(ox, oy);
+  // legs
+  ctx.fillStyle = PAL.ink;
+  if (braced){
+    ctx.fillRect(-5,-2,4,4); ctx.fillRect(2,-2,4,4);
+  } else if (moving){
+    const off = walkPhase===0 ? 1 : -1;
+    ctx.fillRect(-2-off,-2,2,4); ctx.fillRect(1+off,-2,2,4);
+  } else {
+    ctx.fillRect(-2,-2,2,3); ctx.fillRect(1,-2,2,3);
+  }
+  // torso (tunic darkens/tears once hurt)
+  ctx.fillStyle = cond<=2 ? '#5a4326' : PAL.ink;
+  ctx.fillRect(-2,-12+stoop,5,10);
+  ctx.fillStyle = PAL.wood; ctx.fillRect(-2,-4+stoop,5,1.4); // belt
+  ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.6;
+  ctx.beginPath(); ctx.moveTo(0,-11+stoop); ctx.lineTo(0,-3+stoop); ctx.stroke(); // seam
+  if (cond<=2){
+    ctx.strokeStyle=PAL.ink; ctx.lineWidth=0.7;
+    ctx.beginPath(); ctx.moveTo(2,-11+stoop); ctx.lineTo(3.5,-8.5+stoop); ctx.stroke(); // torn shoulder
+  }
+  // head
+  ctx.fillStyle = '#8a5a34';
+  ctx.fillRect(-3,-17+stoop,7,5);
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(-3.5,-18+stoop,8,1.4); // hair tie
+  // arms — the lead arm points along the aim line, the rear arm
+  // cocks back visibly while charging
+  const a = (aimAngle!==undefined ? aimAngle : 48)*D2R;
+  ctx.strokeStyle = '#8a5a34'; ctx.lineWidth=1.6;
+  const leadEx = 2+Math.cos(a)*6, leadEy = -8+Math.sin(a)*6+stoop;
+  ctx.beginPath(); ctx.moveTo(2,-9+stoop); ctx.lineTo(leadEx,leadEy); ctx.stroke();
+  const back = spState==='COCKED' ? clamp(chargeK,0,1) : 0;
+  ctx.beginPath(); ctx.moveTo(-2,-9+stoop); ctx.lineTo(-4-back*5, -11-back*3+stoop); ctx.stroke();
+  ctx.restore();
+}
+
+// v2: the HUD portrait — a genuine close-up, the only facial channel
+// in the game, five CONDITION states with a flinch and periodic blink
+// (GDD §2.3).
+function drawPortrait(px, py){
+  const cond = G.condition;
+  const shift = G.portraitFlinch>0 ? (G.portraitFlinch%4<2 ? -1.4 : 1.4) : 0;
+  ctx.save();
+  ctx.translate(px+11+shift, py+11);
+  const pulsing = cond<=1 && Math.sin(G.t*0.15) > 0;
+  ctx.strokeStyle = pulsing ? '#b23b2e' : PAL.ink;
+  ctx.lineWidth=1.2; ctx.strokeRect(-11,-11,22,22);
+  ctx.fillStyle = '#f2ead8'; ctx.fillRect(-10.4,-10.4,20.8,20.8);
+
+  ctx.fillStyle = '#8a5a34';
+  ctx.beginPath(); ctx.ellipse(0,1,7,8,0,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle = PAL.ink;
+  ctx.beginPath(); ctx.ellipse(0,-5,7.4,4,0,Math.PI,0); ctx.fill();
+  if (cond>=2){
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth=0.7;
+    ctx.beginPath(); ctx.moveTo(5,-4); ctx.lineTo(7,2); ctx.stroke(); // loose strand
+  }
+
+  const blinking = cond>=3 && (G.t%150 < 5);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth=1;
+  if (cond>0){
+    ctx.beginPath(); ctx.moveTo(-5,-1); ctx.lineTo(-1,-1+(cond<=2?0.8:0)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(1,-1+(cond<=2?-0.8:0)); ctx.lineTo(5,-1); ctx.stroke();
+    const eyeH = blinking ? 0.3 : (cond>=3 ? 1.6 : (cond===2 ? 1.2 : 0.6));
+    ctx.fillStyle = PAL.ink;
+    ctx.fillRect(-4.5,0.5,3,eyeH); ctx.fillRect(1.5,0.5,3,eyeH);
+  } else {
+    ctx.fillStyle = PAL.ink; // DOWN — eyes shut
+    ctx.fillRect(-4.5,0.9,3,0.3); ctx.fillRect(1.5,0.9,3,0.3);
+  }
+
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth=0.9;
+  ctx.beginPath();
+  ctx.moveTo(-2.5, cond>=3?5:5.5);
+  ctx.lineTo(cond<=1?1:2.5, cond<=1?6.5:5);
+  ctx.stroke();
+
+  if (cond<=2){
+    ctx.strokeStyle = PAL.bloodDk; ctx.lineWidth=1.1;
+    ctx.beginPath(); ctx.moveTo(-1,-3); ctx.lineTo(2,1); ctx.stroke(); // gash across the brow
+  }
+  if (cond<=1){
+    ctx.fillStyle = PAL.bloodDk;
+    ctx.beginPath(); ctx.arc(5,-2,1.3,0,Math.PI*2); ctx.fill(); // blood at the temple
+  }
+
+  ctx.fillStyle = cond<=2 ? '#5a4326' : PAL.wood;
+  ctx.fillRect(-9,7,18,3);
+  if (cond<=2){
+    ctx.strokeStyle=PAL.ink; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(-3,7); ctx.lineTo(-1,10); ctx.stroke(); // torn shoulder
+  }
+  ctx.restore();
+}
+
+// spear: deliberately the most detailed sprite in the scene, drawn
+// oversized relative to the figure — ported directly from drawSpear().
+// v2 adds visual variants for up to two simultaneously active buffs
+// (GDD §4.5): buffA is the primary (drawn on the head), buffB a
+// secondary cosmetic touch (cord/flame) if a second buff is active.
+function drawSpear(x1, y1, x2, y2, headSize, buffA, buffB){
+  const dx=x2-x1, dy=y2-y1, len=Math.sqrt(dx*dx+dy*dy);
+  if (len<1) return;
+  const ux=dx/len, uy=dy/len, px=-uy, py=ux;
+  headSize = headSize || 5;
+  if (buffA==='quickhaft' || buffB==='quickhaft') headSize *= 0.85;
+  if (buffA==='ironhead'  || buffB==='ironhead')  headSize *= 1.15;
+
+  ctx.strokeStyle = '#5a4326'; ctx.lineWidth = (buffA==='quickhaft')?1.9:2.4;
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2-ux*headSize*0.8, y2-uy*headSize*0.8); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.moveTo(x1+px*0.6,y1+py*0.6); ctx.lineTo(x2-ux*headSize*0.8+px*0.6, y2-uy*headSize*0.8+py*0.6); ctx.stroke();
+
+  ctx.strokeStyle = '#2b1d10'; ctx.lineWidth = 1.2;
+  const wraps = Math.max(1, Math.min(3, Math.floor(len/9)));
+  for (let i=1;i<=wraps;i++){
+    const t = (i/(wraps+1)) * Math.min(len*0.55, 14);
+    const wx=x1+ux*t, wy=y1+uy*t;
+    ctx.beginPath(); ctx.moveTo(wx-px*2.2, wy-py*2.2); ctx.lineTo(wx+px*2.2, wy+py*2.2); ctx.stroke();
+  }
+
+  if (buffA==='searunline' || buffB==='searunline'){
+    ctx.strokeStyle = 'rgba(90,67,38,0.7)'; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x1-ux*10+px*3, y1-uy*10+py*3); ctx.stroke();
+  }
+  if (buffA==='pitchtorch' || buffB==='pitchtorch'){
+    const fx = x2-ux*headSize*1.3, fy = y2-uy*headSize*1.3;
+    ctx.fillStyle = '#3a2a1c'; ctx.fillRect(fx-1.5,fy-1.5,3,3);
+    const flick = Math.floor(G.t/3)%3;
+    ctx.fillStyle = flick===0?'#e8b23c':(flick===1?'#e86c2c':'#f0d060');
+    ctx.beginPath(); ctx.arc(fx, fy-2.5, 1.6, 0, Math.PI*2); ctx.fill();
+  }
+
+  if (buffA==='leistertines' || buffB==='leistertines'){
+    ctx.fillStyle = '#d8d2c4'; ctx.strokeStyle = PAL.ink; ctx.lineWidth=0.9;
+    for (const spread of [-0.5,0,0.5]){
+      const hx = x2-ux*headSize*0.2, hy = y2-uy*headSize*0.2;
+      const tx = x2+ux*headSize*0.4+px*headSize*spread, ty = y2+uy*headSize*0.4+py*headSize*spread;
+      ctx.beginPath(); ctx.moveTo(hx,hy); ctx.lineTo(tx,ty); ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = (buffA==='obsidianedge'||buffB==='obsidianedge') ? '#241a18' :
+                     (buffA==='ironhead'||buffB==='ironhead') ? '#3a3a3e' : '#d8d2c4';
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2-ux*headSize+px*headSize*0.45, y2-uy*headSize+py*headSize*0.45);
+    ctx.lineTo(x2-ux*headSize*0.55, y2-uy*headSize*0.55);
+    ctx.lineTo(x2-ux*headSize-px*headSize*0.45, y2-uy*headSize-py*headSize*0.45);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    if (buffA==='obsidianedge'||buffB==='obsidianedge'){
+      ctx.strokeStyle = 'rgba(232,178,60,0.8)'; ctx.lineWidth=0.8;
+      ctx.beginPath(); ctx.moveTo(x2-ux*headSize*0.3, y2-uy*headSize*0.3); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(x2-ux*headSize*0.35+px*headSize*0.4, y2-uy*headSize*0.35+py*headSize*0.4);
+    ctx.lineTo(x2-ux*headSize*1.15+px*headSize*0.75, y2-uy*headSize*1.15+py*headSize*0.75);
+    ctx.moveTo(x2-ux*headSize*0.35-px*headSize*0.4, y2-uy*headSize*0.35-py*headSize*0.4);
+    ctx.lineTo(x2-ux*headSize*1.15-px*headSize*0.75, y2-uy*headSize*1.15-py*headSize*0.75);
+    ctx.stroke();
+  }
+}
+
+// fish silhouettes — one hand-built shape per species, ported point-
+// for-point from drawFishShape()'s offset rects/lines. v2 adds a
+// species-distinguishing body colour and one high-contrast flank mark
+// per species (GDD §6.2), plus depth-based contrast via alpha blend.
+function orect(cx,cy,ox,oy,w,h,dir){ ctx.fillRect(cx+dir*ox-w/2, cy+oy-h/2, w, h); }
+function oline(cx,cy,ox1,oy1,ox2,oy2,dir){ ctx.beginPath(); ctx.moveTo(cx+dir*ox1,cy+oy1); ctx.lineTo(cx+dir*ox2,cy+oy2); ctx.stroke(); }
+function ohole(cx,cy,ox,oy,dir){ ctx.fillStyle='#fdf8ec'; ctx.fillRect(cx+dir*ox-0.6, cy+oy-0.6, 1.2, 1.2); }
+
+const FISH_COLOR = {
+  redband:   { body:'#8a5a34', accent:'#c85a34' }, // broad red-orange lateral stripe
+  bull:      { body:'#3f4a3c', accent:'#e8d9b0' }, // pale cream spots on a dark body
+  chinook:   { body:'#5a4326', accent:'#241a10' }, // hooked kype, dark heavy dorsal
+  steelhead: { body:'#a8bcc4', accent:'#d99aa8' }, // chrome flank, faint pink wash
+};
+function drawFishShape(x, y, key, dir, sc, alpha){
+  sc = sc || 1;
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(sc, sc); x=0; y=0;
+  if (alpha!==undefined) ctx.globalAlpha = alpha;
+  const col = FISH_COLOR[key] || {body:'#6b4a2a', accent:'#2b1d10'};
+  ctx.fillStyle = col.body;
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 0.9/sc;
+
+  if (key==='redband'){
+    orect(x,y, 0,0, 9,3, dir); orect(x,y, 3,-1.5, 3,2, dir);
+    oline(x,y, 4.5,-0.5, 6,0.5, dir);
+    oline(x,y, -4.5,0, -7,-2.5, dir); oline(x,y, -4.5,0, -7,2.5, dir);
+    ctx.strokeStyle = col.accent; ctx.lineWidth = 1.1/sc;
+    oline(x,y, -3.5,0.3, 4,0.3, dir);
+    ctx.strokeStyle = PAL.ink;
+    ohole(x,y, 4,-1, dir);
+  } else if (key==='bull'){
+    orect(x,y, 0,0, 12,5, dir); orect(x,y, 5,-1, 3,3, dir);
+    oline(x,y, -6,-2, -8,-2.5, dir); oline(x,y, -6,2, -8,2.5, dir);
+    oline(x,y, -8,-2.5, -8,2.5, dir);
+    ctx.fillStyle = col.accent;
+    orect(x,y, -1,-1.4, 1,1, dir); orect(x,y, 2,0.5, 1,1, dir); orect(x,y, -4,1.5, 1,1, dir);
+    ohole(x,y, 5.5,-1.5, dir);
+  } else if (key==='chinook'){
+    orect(x,y, 0,0, 18,5, dir); orect(x,y, 7,-1, 4,3, dir);
+    oline(x,y, 10,0.5, 13,2, dir); oline(x,y, 13,2, 10,2.5, dir);
+    oline(x,y, -8,-2.5, -12,-4, dir); oline(x,y, -8,2.5, -12,4, dir);
+    ctx.strokeStyle = col.accent; ctx.lineWidth=1/sc;
+    oline(x,y, 8,-1.5, 10.5,-2.5, dir);
+    ctx.strokeStyle = PAL.ink;
+    ohole(x,y, 7.5,-1.5, dir);
+  } else if (key==='steelhead'){
+    orect(x,y, 0,0, 14,3, dir); orect(x,y, 5.5,-1, 3,2, dir);
+    oline(x,y, 3,-1.5, 4.5,-3, dir);
+    oline(x,y, -6.5,0, -9.5,-3, dir); oline(x,y, -6.5,0, -9.5,3, dir);
+    ctx.strokeStyle = col.accent; ctx.lineWidth=1.4/sc;
+    oline(x,y, -3,-0.6, 3,-0.6, dir);
+    ctx.strokeStyle = PAL.ink;
+    ohole(x,y, 6,-1, dir);
+  } else {
+    orect(x,y, 0,0, 9,3, dir);
+  }
+  ctx.restore();
+}
+
+function drawMiner(m){
+  if (m.state==='gone') return;
+  const x = m.x, y = WATER_Y;
+  ctx.fillStyle = '#3a2c1c';
+  ctx.fillRect(x-2, y-14, 5, 10);
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(x-2, y-4, 2, 4); ctx.fillRect(x+1, y-4, 2, 4);
+  ctx.fillStyle = '#8a6338';
+  ctx.fillRect(x-3, y-19, 7, 5);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.3;
+  if (m.type==='rock'){
+    if (m.state==='wind'){
+      const a = -1.2 - m.arm*1.1;
+      const ex = x+2+Math.cos(a)*7, ey = y-12+Math.sin(a)*7;
+      ctx.beginPath(); ctx.moveTo(x+2,y-12); ctx.lineTo(ex,ey); ctx.stroke();
+      ctx.fillStyle = '#5a5f66'; ctx.fillRect(ex-1.5,ey-1.5,3,3);
+    } else {
+      ctx.beginPath(); ctx.moveTo(x+2,y-12); ctx.lineTo(x+7,y-9); ctx.stroke();
+    }
+  } else {
+    ctx.beginPath(); ctx.moveTo(x-3,y-12); ctx.lineTo(x-16,y+10); ctx.stroke();
+    ctx.fillStyle = '#7a8a6a'; ctx.fillRect(x-17.5,y+8.5,3,3);
+  }
+}
+// v2: the vinegar miner — taller, dark coat, wide-brim hat, and a
+// gold glint cycling on the bottle throughout the approach (GDD §6.3)
+function drawVinegarMiner(m){
+  if (m.state==='gone') return;
+  const x = m.x, y = WATER_Y;
+  ctx.fillStyle = '#241a18';
+  ctx.fillRect(x-3, y-18, 6, 14);
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(x-2, y-4, 2, 4); ctx.fillRect(x+1, y-4, 2, 4);
+  ctx.fillStyle = '#8a6338';
+  ctx.fillRect(x-3, y-23, 7, 4);
+  ctx.fillStyle = '#1a120c';
+  ctx.fillRect(x-6, y-24, 13, 2);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.3;
+  const glintOn = Math.floor(G.t/8)%2===0;
+  if (m.state==='wind'){
+    const a = -1.2 - m.arm*1.1;
+    const ex = x+2+Math.cos(a)*7, ey = y-14+Math.sin(a)*7;
+    ctx.beginPath(); ctx.moveTo(x+2,y-14); ctx.lineTo(ex,ey); ctx.stroke();
+    ctx.fillStyle = PAL.glassGrn; ctx.fillRect(ex-1.5,ey-2.5,3,4);
+    if (glintOn){ ctx.fillStyle='#e8d24a'; ctx.fillRect(ex-0.5,ey-2,1,1); }
+  } else {
+    ctx.beginPath(); ctx.moveTo(x+2,y-14); ctx.lineTo(x+6,y-10); ctx.stroke();
+    ctx.fillStyle = PAL.glassGrn; ctx.fillRect(x+4.5,y-11.5,3,4);
+    if (glintOn){ ctx.fillStyle='#e8d24a'; ctx.fillRect(x+5.5,y-11,1,1); }
+  }
+}
+
+// --- v2: HUD elements (GDD §8) ---
+function drawConditionPips(x,y){
+  for (let i=0;i<4;i++){
+    const px = x+i*7;
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth=1;
+    ctx.strokeRect(px, y, 5, 7);
+    if (i < G.condition){ ctx.fillStyle = PAL.ink; ctx.fillRect(px+1,y+1,3,5); }
+  }
+}
+function drawLivesPips(x,y){
+  const n = Math.min(G.lives,5);
+  for (let i=0;i<n;i++){
+    const px = x+i*7;
+    ctx.fillStyle = PAL.gold;
+    ctx.beginPath(); ctx.moveTo(px,y+6); ctx.lineTo(px+3,y); ctx.lineTo(px+6,y+6); ctx.closePath(); ctx.fill();
+  }
+}
+function drawBuffHUD(x0,y0){
+  let y = y0;
+  for (const b of G.buffsActive){
+    const def = BUFFS[b.key];
+    const frac = clamp(b.timer/(def.dur*30),0,1);
+    rtext(def.name, x0, y+6, {font:'9px Georgia'});
+    ctx.strokeStyle=PAL.ink; ctx.lineWidth=0.8; ctx.strokeRect(x0-46,y,46,4);
+    ctx.fillStyle=PAL.gold; ctx.fillRect(x0-45,y+0.5,44*frac,3);
+    y += 12;
+  }
+}
+function drawStreakHUD(){
+  if (G.streak>=2){
+    ctext('CLEAN \u00d7 '+G.streak, 216, {font:'11px Georgia', color:'#4a3018'});
+  }
+}
+function drawBanner(){
+  if (G.banner){
+    ctx.save();
+    ctx.globalAlpha = clamp(G.banner.t/15,0,1);
+    boldCText(G.banner.text, 40, 15);
+    ctx.restore();
+  }
+}
+function drawDrops(){
+  for (const d of G.drops){
+    const k = d.t/d.dur;
+    const x = lerp(d.x, d.tx, k);
+    const y = lerp(d.y, d.ty, k) - Math.sin(k*Math.PI)*14;
+    ctx.fillStyle = PAL.gold;
+    ctx.beginPath(); ctx.arc(x,y,2.5,0,Math.PI*2); ctx.fill();
+  }
+}
+function drawBalance(){
+  const y=32; // moved down to make room for the portrait (GDD §8)
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(4,y+6); ctx.lineTo(7,y+2); ctx.lineTo(10,y+6); ctx.stroke();
+  ctx.strokeRect(14, y, 44, 6);
+  const frac = clamp(G.balance/100,0,1);
+  ctx.fillStyle = G.balance<30 ? '#b23b2e' : '#7aa15c';
+  ctx.fillRect(15, y+1, 42*frac, 4);
+}
+function iconFish(x,y){
+  ctx.fillStyle = PAL.ink;
+  ctx.beginPath(); ctx.arc(x+3,y+3,3,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(x,y+3); ctx.lineTo(x-3,y); ctx.moveTo(x,y+3); ctx.lineTo(x-3,y+6); ctx.stroke();
+}
+function iconSpearTick(x,y){
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(x,y+6); ctx.lineTo(x+7,y-1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x+7,y-1); ctx.lineTo(x+4,y-1); ctx.moveTo(x+7,y-1); ctx.lineTo(x+7,y+2); ctx.stroke();
+}
+function wavePips(cx, y){
+  const n = WAVES.length, w = 6, totalW = n*w+(n-1)*3, x0 = cx-totalW/2;
+  for (let i=0;i<n;i++){
+    const x = x0 + i*(w+3);
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth=1; ctx.strokeRect(x,y,w,w);
+    if (i < G.wave) { ctx.fillStyle = PAL.ink; ctx.fillRect(x+1,y+1,w-2,w-2); }
+  }
+}
+function cacheCount(t){ let n=0; for (const k in t) n+=t[k]; return n; }
+
+function drawPlay(){
+  drawSky();
+  if (G.w.poolR < 336){
+    drawBank(G.w.poolR, WATER_Y+6, BANK_X-G.w.poolR, BOT_Y-WATER_Y-6);
+  }
+  drawWater(POOL_L, G.w.poolR, WATER_Y, BOT_Y, G.t);
+  drawBank(POOL_L, BOT_Y, LW-POOL_L, LH-BOT_Y);
+  drawCanyonWalls();
+  ctx.strokeStyle = PAL.rockDk; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(BANK_X,WATER_Y); ctx.lineTo(LW,WATER_Y); ctx.stroke();
+
+  const oy = G.obsY;
+  drawPlatform(oy);
+
+  const ox = G.playerX + G.shoveX;
+  const braced = !!keys['KeyB'];
+  const sp = G.sp;
+  drawFigure(ox, oy, braced, G.playerMoving, sp.angle, sp.state, sp.charge);
+
+  const buffA = G.buffsActive[0] ? G.buffsActive[0].key : null;
+  const buffB = G.buffsActive[1] ? G.buffsActive[1].key : null;
+
+  if (!sp.live && sp.state!=='RECOVERING'){
+    const a = sp.angle*D2R;
+    let ex = ox+(WATER_Y-oy)/Math.tan(a), ey = WATER_Y;
+    if (ex > LW){ ex = LW; ey = oy+(LW-ox)*Math.tan(a); }
+    ctx.strokeStyle = 'rgba(43,29,16,0.55)'; ctx.lineWidth=1;
+    dashedLine(ox+3, oy-6, ex, ey);
+    ctx.strokeStyle = PAL.gold; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.moveTo(ex-3,ey-3); ctx.lineTo(ex+3,ey+3); ctx.moveTo(ex-3,ey+3); ctx.lineTo(ex+3,ey-3); ctx.stroke();
+  }
+  if (sp.live){
+    let n = Math.sqrt(sp.vx*sp.vx+sp.vy*sp.vy); if (n===0) n=1;
+    drawSpear(sp.x-sp.vx/n*24, sp.y-sp.vy/n*24, sp.x, sp.y, 6, buffA, buffB);
+  } else if (sp.state==='COCKED'){
+    const back = clamp(sp.charge,0,1);
+    drawSpear(ox+2, oy-9, ox-8-back*8, oy-17-back*6, 5, buffA, buffB);
+  } else if (sp.state!=='RECOVERING'){
+    const a = sp.angle*D2R;
+    drawSpear(ox+2, oy-8, ox+2+Math.cos(a)*22, oy-8+Math.sin(a)*22, 5, buffA, buffB);
+  }
+  if (G.stuck) drawSpear(G.stuck.x+4, G.stuck.y-20, G.stuck.x, G.stuck.y, 5, buffA, buffB);
+
+  for (const f of G.fish){
+    const dir = f.vx>=0 ? 1 : -1;
+    const dt2 = clamp((f.fy-WATER_Y)/110,0,1);
+    drawFishShape(f.fx, f.fy, f.s.key, dir, 1, lerp(1,0.6,dt2));
+  }
+  if (G.hitFlash){
+    ctx.fillStyle = PAL.gold;
+    ctx.fillRect(G.hitFlash.x-2, G.hitFlash.y-2, 4, 4);
+  }
+  for (const t of G.taken){
+    const k = t.t/50;
+    const x = lerp(t.x, t.tx, k), y = lerp(t.y, WATER_Y-10, k);
+    drawFishShape(x, y, t.s.key, -1);
+  }
+  for (const m of G.miners){ if (m.type==='vinegar') drawVinegarMiner(m); else drawMiner(m); }
+  if (G.minerHit){
+    const mh = G.minerHit, k = 1-(mh.t/16), r = 4+k*10;
+    ctx.strokeStyle = PAL.gold; ctx.lineWidth=1.6;
+    for (let a=0;a<8;a++){
+      const ang = a*(Math.PI/4);
+      ctx.beginPath();
+      ctx.moveTo(mh.x+Math.cos(ang)*r*0.4, mh.y+Math.sin(ang)*r*0.4);
+      ctx.lineTo(mh.x+Math.cos(ang)*r, mh.y+Math.sin(ang)*r);
+      ctx.stroke();
+    }
+  }
+  for (const r of G.rocks){
+    if (r.kind==='vinegar'){
+      r.rot = (r.rot||0)+0.35;
+      ctx.save(); ctx.translate(r.x,r.y); ctx.rotate(r.rot);
+      ctx.fillStyle = PAL.glassGrn; ctx.fillRect(-1.5,-3,3,6);
+      ctx.restore();
+      ctx.strokeStyle='rgba(74,107,82,0.35)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(r.x-r.vx*2, r.y-r.vy*2); ctx.lineTo(r.x,r.y); ctx.stroke();
+    } else {
+      ctx.fillStyle='#5a5f66'; ctx.fillRect(r.x-1.5,r.y-1.5,3,3);
+    }
+  }
+  drawDrops();
+
+  drawPortrait(2,2);
+  drawConditionPips(28,6);
+  drawLivesPips(28,15);
+  wavePips(LW/2, 4);
+  drawBalance();
+  iconFish(LW-34, 4);
+  rtext(String(cacheCount(G.cache)), LW-4, 12, {font:'12px Georgia'});
+  ctx.strokeStyle = PAL.waterDp; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(LW-34,16); ctx.lineTo(LW-28,12); ctx.lineTo(LW-22,16); ctx.stroke();
+  rtext(String(G.fish.length), LW-4, 22, {font:'12px Georgia'});
+  drawBuffHUD(LW-4, 30);
+  drawStreakHUD();
+  if (sp.state==='COCKED'){
+    iconSpearTick(4, 40);
+    ctx.fillStyle = PAL.gold; ctx.fillRect(14, 42, Math.min(40, 4+sp.charge*40), 3);
+  }
+  if (G.catchFlash) ctext('CAUGHT: '+G.catchFlash.name, 58, {font:'13px Georgia', color:'#2b1d10'});
+  drawBanner();
+}
+
+// v2: two distinct, legible loss states, both routing into the same
+// life-lost card (GDD §1.2)
+function drawLifeLost(){
+  drawPlay();
+  const k = clamp(G.fallT/60,0,1);
+  if (k > 0.35){
+    ctx.fillStyle = 'rgba(14,20,36,0.55)'; ctx.fillRect(0,0,LW,LH);
+    let msg = 'YOU WENT INTO THE WATER';
+    if (G.fallKind==='knocked') msg = 'KNOCKED DOWN';
+    else if (G.fallKind==='vinegar') msg = 'SOAKED IN VINEGAR';
+    boldCText(msg, 118, 16);
+    ctext('LIVES '+Math.max(G.lives,0), 142, {font:'13px Georgia', color:'#f2ead8'});
+  }
+}
+// v2: the continue screen — 10-second countdown, scene keeps
+// animating behind it (GDD §1.4, §12 Q1)
+function drawContinue(){
+  drawPlay();
+  ctx.fillStyle = 'rgba(14,20,36,0.6)'; ctx.fillRect(0,0,LW,LH);
+  boldCText('CONTINUE?', 96, 24);
+  boldCText(String(Math.max(0,Math.ceil(G.continueT/30))), 140, 34);
+  ctext('PRESS ENTER \u00b7 CREDITS '+G.credits, 176, {font:'13px Georgia', color:'#f2ead8'});
+}
+
+function drawTitle(){
+  drawSky();
+  drawWater(0, LW, 150, LH, G.t);
+  drawCanyonWalls();
+  boldCText('CLAIMJUMPER!', 74, 34);
+  ctext('SPEAR FISH. WATCH FOR MINERS.', 100, {font:'13px Georgia', color:'#4a3018'});
+  const a = 0.55 + Math.sin(G.t*0.12)*0.45;
+  ctx.save(); ctx.globalAlpha = a;
+  boldCText('HOLD SPACE, RELEASE TO THROW', 160, 15);
+  ctx.restore();
+  ctext('PRESS ENTER TO START', 182, {font:'bold 13px Georgia', color:'#2b1d10'});
+  rtext('CREDITS '+G.credits, LW-6, LH-6, {font:'11px Georgia', color:'#4a3018'});
+}
+
+function drawWaveIntro(){
+  drawSky();
+  boldCText('WAVE '+G.wave, 70, 26);
+  ctext(G.w.name, 94, {font:'14px Georgia', color:'#4a3018'});
+  ctext('PLATFORM: '+Math.floor(G.w.h/5)+' FEET', 114, {font:'12px Georgia', color:'#6b5030'});
+  if (G.wave===G.vinegarWave && !G.vinegarSpawned){
+    ctext('SOME OF THEM CAME UP FROM VINEGAR HILL.', 130, {font:'11px Georgia', color:'#6b3018'});
+  }
+  if (G.wave===1){
+    ctext('ARROWS/A D MOVE \u00b7 UP/DOWN AIM \u00b7 SPACE THROW', 146, {font:'11px Georgia'});
+    ctext('B BRACES A ROCK \u00b7 WATCH FOR THE GLASS GLINT', 162, {font:'11px Georgia'});
+    if (G.t>40) ctext('PRESS ENTER', 192, {font:'bold 13px Georgia'});
+  } else {
+    if (G.t>40) ctext('PRESS ENTER', 150, {font:'bold 13px Georgia'});
+  }
+}
+
+function isNewlySeen(k){ return G.newlySeen.includes(k); }
+function drawTally(){
+  drawSky();
+  drawWater(0, LW, 196, LH, G.t);
+  const page = G.tallyPages[G.tallyPage] || {type:'summary'};
+
+  if (page.type==='intro'){
+    boldCText('WAVE '+G.wave+' COMPLETE', 92, 24);
+    ctext(G.w.name, 118, {font:'13px Georgia', color:'#4a3018'});
+    if (G.t>20) ctext('PRESS ENTER', 168, {font:'bold 13px Georgia'});
+  } else if (page.type==='species'){
+    const k = page.key, s = SPECIES[k], n = G.cache[k]||0;
+    drawFishShape(LW/2, 92, k, 1, 3.4);
+    boldCText(s.name, 132, 19);
+    ctext('CAUGHT x'+n, 150, {font:'13px Georgia'});
+    if (isNewlySeen(k)) wrapText(s.note, LW/2, 168, 280, 14, {font:'11px Georgia'});
+    if (G.t>20) ctext('PRESS ENTER', 202, {font:'bold 13px Georgia'});
+  } else {
+    let tot = 0;
+    for (const kk in G.cache) tot += G.cache[kk]*(SPECIES[kk]?SPECIES[kk].val:0);
+    boldCText('WORTH '+tot, 100, 24);
+    if (G.t>20){
+      if (G.wave>=WAVES.length) ctext('ENTER \u2014 THE LAST RUN IS DONE', 150, {font:'bold 13px Georgia'});
+      else ctext('ENTER \u2014 NEXT WAVE', 150, {font:'bold 13px Georgia'});
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// ending sequence — rebuilt from the Lua's drawBoat/drawPineSkyline/
+// drawEndPanel (7-point hull, seated rower, swinging oars, fixed
+// pine-skyline silhouette, continuous two-way scroll through the
+// same panel content/order). No crank in a browser, so the scroll
+// is driven by Up/Down or the mouse wheel instead of "undock the
+// crank". v2 adds a final-tally line to the fish-count panel.
+function buildPineSkyline(){
+  const trees=[]; let x=0, i=0;
+  while (x < LW+20){ trees.push({x, h: 14+(i*7%18)}); x += 14+(i*5%10); i++; }
+  return trees;
+}
+const PINES = buildPineSkyline();
+function drawPineSkyline(baseY){
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,baseY); ctx.lineTo(LW,baseY); ctx.stroke();
+  for (const t of PINES){
+    const w=10;
+    for (let tier=0;tier<3;tier++){
+      const tw = w-tier*3;
+      ctx.fillStyle = tier===0 ? PAL.rockMd : (tier===1?PAL.rockDk:'#241a10');
+      ctx.fillRect(t.x-tw/2, baseY-t.h+tier*6, tw, 6);
+    }
+    ctx.fillStyle = '#4a3018';
+    ctx.fillRect(t.x-1, baseY-2, 2, 4);
+  }
+}
+function drawBoat(x, y, phase){
+  ctx.strokeStyle = PAL.ink; ctx.fillStyle = PAL.wood; ctx.lineWidth=1.2;
+  const hull = [[-16,4],[-12,8],[12,8],[16,4],[14,-2],[-14,-2],[-16,4]];
+  ctx.beginPath();
+  ctx.moveTo(x+hull[0][0], y+hull[0][1]);
+  for (let i=1;i<hull.length;i++) ctx.lineTo(x+hull[i][0], y+hull[i][1]);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.beginPath(); ctx.moveTo(x-11,y+1); ctx.lineTo(x+11,y+1); ctx.stroke();
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(x-2, y-9, 5, 7);
+  ctx.fillStyle = '#8a5a34';
+  ctx.fillRect(x-3, y-13, 6, 4);
+  ctx.strokeStyle = '#5a4326'; ctx.lineWidth=1.4;
+  const a = Math.sin(phase)*0.9;
+  for (const side of [-1,1]){
+    const ox=x, oy=y-6;
+    const ex = ox+side*Math.cos(a)*18, ey = oy-Math.sin(a)*10-2;
+    ctx.beginPath(); ctx.moveTo(ox,oy); ctx.lineTo(ex,ey); ctx.stroke();
+    ctx.fillStyle='#2b1d10'; ctx.fillRect(ex-2,ey-2,4,4);
+  }
+}
+function plate(x,y,w,h){
+  ctx.fillStyle = 'rgba(253,248,236,0.92)'; ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth=1; ctx.strokeRect(x,y,w,h);
+}
+const qrImg = new Image();
+let qrReady = false, qrFailed = false;
+qrImg.onload = () => { qrReady = true; };
+qrImg.onerror = () => { qrFailed = true; };
+qrImg.src = 'claimjumper-images/qr.png';
+
+const PANEL_H = 240, N_PANELS = 7;
+function drawEndPanel(idx, top){
+  if (idx===1){ plate(60, top+94, 280, 32); ctext('The salmon came up the Boise River.', top+114); }
+  else if (idx===2){ plate(90, top+94, 220, 32); ctext('Two dams sealed it for good.', top+114); }
+  else if (idx===3){ plate(80, top+94, 240, 32); ctext('No salmon have returned since.', top+114); }
+  else if (idx===4){
+    let n=0; for (const v of Object.values(G.total)) n+=v;
+    plate(90, top+86, 220, 46);
+    boldCText(n+' FISH TAKEN', top+109, 16);
+    ctext('BEST WAVE '+G.bestWave+' \u00b7 '+G.livesUsed+' LIVES USED', top+126, {font:'10px Georgia', color:'#4a3018'});
+  } else if (idx===5){
+    plate(60, top+86, 280, 48);
+    ctext('POST TENEBRAS LUX', top+106);
+    ctext('LUX ESTO UMBRAS FINDENS', top+124);
+  } else if (idx===6){
+    plate(100, top+94, 200, 32); boldCText('TRY. FAIL. LEARN.', top+117, 16);
+  } else if (idx===7){
+    if (qrReady){
+      const iw=44, ih=44;
+      plate(LW/2-iw/2-6, top+96-ih/2-6, iw+12, ih+12);
+      ctx.drawImage(qrImg, LW/2-iw/2, top+96-ih/2, iw, ih);
+    } else {
+      plate(LW/2-110, top+80, 220, 48);
+      ctext(qrFailed ? 'QR UNAVAILABLE' : 'LOADING QR\u2026', top+96);
+      ctext('lux_esto@protonmail.com', top+112, {font:'10px Georgia'});
+    }
+  }
+}
+function updateEnd(dt){
+  const spd = 220; // px/sec of logic-space scroll, keyboard-driven equivalent of the crank
+  let d = 0;
+  if (keys['ArrowDown'] || keys['KeyS']) d += spd*dt;
+  if (keys['ArrowUp']   || keys['KeyW']) d -= spd*dt;
+  d += wheelDelta; wheelDelta = 0;
+  G.endScroll = clamp(G.endScroll + d, 0, (N_PANELS-1)*PANEL_H);
+  G.endStroke += Math.abs(d)*0.05;
+}
+let wheelDelta = 0;
+cv.addEventListener('wheel', e => { wheelDelta += e.deltaY*0.5; e.preventDefault(); }, {passive:false});
+function drawEnd(){
+  drawSky();
+  drawPineSkyline(200);
+  for (let i=1;i<=N_PANELS;i++){
+    const top = (i-1)*PANEL_H - G.endScroll;
+    if (top < LH && top+PANEL_H > 0) drawEndPanel(i, top);
+  }
+  drawBoat(50, 212, G.endStroke);
+  if (G.t>30) ctext('SCROLL WITH \u2191\u2193 \u00b7 ENTER TO SKIP', 230, {font:'11px Georgia', color:'#4a3018'});
+}
+
+// ---------------------------------------------------------------
+// main loop — fixed 30Hz logic tick (matches the Playdate build's
+// pd.display.setRefreshRate(30) exactly), drawn every animation frame.
+function tick(){
+  G.t += 1;
+  const dt = TICK_DT;
+
+  const enterDown = !!keys['Enter'];
+  const enterPressed = enterDown && !prevA;
+  prevA = enterDown;
+
+  if (G.mode==='TITLE'){
+    musicSet(MUS_TITLE);
+    if (enterPressed) startRun();
+  } else if (G.mode==='WAVEINTRO'){
+    musicSet(MUS_TITLE);
+    if (G.t>90 || enterPressed){ G.mode='PLAY'; G.t=0; }
+  } else if (G.mode==='PLAY'){
+    musicSet(null);
+    updatePlay();
+  } else if (G.mode==='LIFELOST'){
+    musicSet(null);
+    G.fallT += 1;
+    if (G.fallT>60){
+      if (G.lives > 0){
+        resumeWave();
+        G.mode='PLAY'; G.t=0;
+      } else if (G.credits > 0){
+        G.mode='CONTINUE'; G.continueT=300; G.t=0;
+      } else {
+        G.bestWave = Math.max(G.bestWave, G.wave);
+        G.mode='END'; G.t=0; G.endScroll=0; G.endStroke=0;
+      }
+    }
+  } else if (G.mode==='CONTINUE'){
+    musicSet(null);
+    if (keys['Escape']){
+      G.bestWave = Math.max(G.bestWave, G.wave);
+      G.mode='END'; G.t=0; G.endScroll=0; G.endStroke=0;
+    } else {
+      G.continueT -= 1;
+      if (enterPressed){
+        G.credits -= 1;
+        G.lives = 3;
+        if (!G.vinegarSpawned) scheduleVinegar(); // a continue can bring him back (GDD §7.1)
+        resumeWave();
+        G.mode='PLAY'; G.t=0;
+      } else if (G.continueT<=0){
+        G.bestWave = Math.max(G.bestWave, G.wave);
+        G.mode='END'; G.t=0; G.endScroll=0; G.endStroke=0;
+      }
+    }
+  } else if (G.mode==='TALLY'){
+    musicSet(null);
+    if (G.t>20 && enterPressed){
+      if (G.tallyPage < G.tallyPages.length-1){ G.tallyPage += 1; G.t=0; sfxPageTurn(); }
+      else {
+        G.wave += 1;
+        if (G.wave > WAVES.length){ G.bestWave=Math.max(G.bestWave,WAVES.length); G.mode='END'; G.t=0; G.endScroll=0; G.endStroke=0; }
+        else startWave();
+      }
+    }
+  } else if (G.mode==='END'){
+    musicSet(MUS_TITLE);
+    updateEnd(dt);
+    if (G.t>15 && enterPressed){ G.mode='TITLE'; G.t=0; }
+  }
+  musicTick();
+}
+
+function draw(){
+  ctx.save();
+  ctx.setTransform(DRAW_SCALE,0,0,DRAW_SCALE,0,0);
+  ctx.clearRect(0,0,LW,LH);
+  ctx.fillStyle = '#fdf8ec'; ctx.fillRect(0,0,LW,LH);
+  if (G.mode==='TITLE') drawTitle();
+  else if (G.mode==='WAVEINTRO') drawWaveIntro();
+  else if (G.mode==='PLAY') drawPlay();
+  else if (G.mode==='LIFELOST') drawLifeLost();
+  else if (G.mode==='CONTINUE') drawContinue();
+  else if (G.mode==='TALLY') drawTally();
+  else if (G.mode==='END') drawEnd();
+  ctx.restore();
+}
+
+let lastT = performance.now(), acc = 0;
+const STEP_MS = 1000/30;
+function frame(now){
+  let delta = now - lastT; lastT = now;
+  if (delta > 250) delta = 250;
+  acc += delta;
+  let iter = 0;
+  while (acc >= STEP_MS && iter < 6){ tick(); acc -= STEP_MS; iter++; }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+G.sp = newSpear();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

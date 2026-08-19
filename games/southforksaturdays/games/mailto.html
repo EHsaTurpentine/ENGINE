@@ -1,0 +1,3387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MAILTO</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0e1424;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Georgia', 'Palatino Linotype', serif;
+    overflow: hidden;
+    color: #f2ead8;
+  }
+  #wrap {
+    position: relative;
+    width: 960px; height: 540px;
+    box-shadow: 0 0 0 5px #241a10, 0 0 0 9px #6b4a2a, 0 0 0 10px #8a6338,
+                0 26px 70px rgba(0,0,0,0.7);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  canvas { display: block; background: #cfe6f2; image-rendering: pixelated; }
+  #hint {
+    position: absolute; bottom: -36px; left: 0; width: 100%;
+    text-align: center; font-size: 12px; color: #9a8f78; letter-spacing: 0.6px;
+  }
+  #hint b { color: #e8b23c; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+</div>
+<div id="hint">MOVE ←→ &nbsp;·&nbsp; JUMP ↑ / SPACE &nbsp;·&nbsp; SIGNAL FLARE <b>F</b> &nbsp;·&nbsp; DUCK ↓ &nbsp;·&nbsp; MUSIC <b>M</b> &nbsp;·&nbsp; SFX <b>N</b> &nbsp;·&nbsp; JUKEBOX <b>J</b> (title screen) &nbsp;·&nbsp; walk into a vehicle to ride it, a crate to upgrade</div>
+<script>
+"use strict";
+
+/* ============================================================
+   MAILTO — "14 Miles of Weather" (winter level prototype)
+   A Metal-Slug-flavored side scroller about star-route mail
+   carriers between Rocky Bar and Atlanta, Idaho Territory.
+   Self-contained vanilla JS + Canvas. No dependencies.
+   ============================================================ */
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const GROUND_Y = 420;
+
+// ---------- CONFIG ----------
+const LEVEL_LENGTH = 9000;         // "feet" of trail, Rocky Bar -> Atlanta
+const GRAVITY = 0.62;
+const JUMP_V = -12.9;          // a touch more hang time to clear wider gaps
+const JUMP_CUT = 0.45;         // release jump early = shorter hop (variable height)
+const COYOTE_FRAMES = 7;       // grace period to still jump just after leaving an edge
+const JUMP_BUFFER = 8;         // pressing jump slightly early still registers on landing
+const MOVE_A = 0.58;
+const MAX_RUN = 4.6;
+const FRICTION_GROUND = 0.80;
+const FRICTION_ICE = 0.955;
+const FRICTION_DRIFT = 0.58;
+
+let keys = {};
+let konamiBuf = [];
+const KONAMI = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','KeyB','KeyA'];
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  initAudio();
+  if (e.code==='KeyM' && actx) { musicMuted = !musicMuted; musicGain.gain.setTargetAtTime(musicMuted?0:0.55, actx.currentTime, 0.02); }
+  if (e.code==='KeyN' && actx) { sfxMuted = !sfxMuted; sfxGain.gain.setTargetAtTime(sfxMuted?0:0.95, actx.currentTime, 0.02); }
+  if (e.code==='KeyJ' && state===STATE.TITLE) { jukeboxOpen = !jukeboxOpen; jukeboxSel = 0; sfxMenu(); }
+  else if (jukeboxOpen) {
+    if (e.code==='Escape') { jukeboxOpen = false; sfxMenu(); }
+    else if (e.code==='ArrowUp') { jukeboxSel = (jukeboxSel - 1 + TRACK_ORDER.length) % TRACK_ORDER.length; sfxMenu(); }
+    else if (e.code==='ArrowDown') { jukeboxSel = (jukeboxSel + 1) % TRACK_ORDER.length; sfxMenu(); }
+    else if (e.code==='Enter') { downloadTrack(TRACK_ORDER[jukeboxSel]); }
+  }
+  konamiBuf.push(e.code);
+  if (konamiBuf.length > KONAMI.length) konamiBuf.shift();
+  if (state===STATE.TITLE && konamiBuf.length===KONAMI.length && konamiBuf.every((k,i)=>k===KONAMI[i])) {
+    konamiBuf = [];
+    state = STATE.PICKAXE;
+    paReset();
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ============================================================
+// AUDIO — procedural chiptune SFX + two looping background tracks.
+// No audio files: everything is synthesized live with the Web Audio
+// API (square/triangle/sawtooth oscillators + a filtered noise burst
+// for percussion), so the whole game stays a single self-contained
+// HTML file. Music/SFX only start after the first keypress, since
+// browsers block audio before a user gesture. Press M to mute.
+// ============================================================
+let actx = null, masterGain, sfxGain, musicGain, musicMuted = false, sfxMuted = false, audioReady = false;
+let noiseBuffer = null;
+
+function initAudio(){
+  if (actx) { if (actx.state==='suspended') actx.resume(); return; }
+  try {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = actx.createGain(); masterGain.gain.value = 0.55; masterGain.connect(actx.destination);
+    sfxGain = actx.createGain(); sfxGain.gain.value = 0.95; sfxGain.connect(masterGain);
+    musicGain = actx.createGain(); musicGain.gain.value = 0.55; musicGain.connect(masterGain);
+    audioReady = true;
+  } catch(e) { audioReady = false; }
+}
+
+function tone(freq, dur, type, gain, when, bus){
+  if (!actx || !freq) return;
+  const t = when!==undefined ? when : actx.currentTime;
+  const osc = actx.createOscillator();
+  osc.type = type || 'square';
+  osc.frequency.setValueAtTime(freq, t);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(gain||0.25,0.001), t+0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  osc.connect(g); g.connect(bus || sfxGain);
+  osc.start(t); osc.stop(t+dur+0.03);
+}
+
+function sweep(f0, f1, dur, type, gain, when, bus){
+  if (!actx) return;
+  const t = when!==undefined ? when : actx.currentTime;
+  const osc = actx.createOscillator();
+  osc.type = type || 'square';
+  osc.frequency.setValueAtTime(f0, t);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(f1,20), t+dur);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(gain||0.25,0.001), t+0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  osc.connect(g); g.connect(bus || sfxGain);
+  osc.start(t); osc.stop(t+dur+0.03);
+}
+
+function getNoiseBuffer(){
+  if (noiseBuffer) return noiseBuffer;
+  const len = actx.sampleRate * 0.5;
+  noiseBuffer = actx.createBuffer(1, len, actx.sampleRate);
+  const d = noiseBuffer.getChannelData(0);
+  for (let i=0;i<len;i++) d[i] = Math.random()*2 - 1;
+  return noiseBuffer;
+}
+
+function noiseHit(dur, gain, when, bus, hp){
+  if (!actx) return;
+  const t = when!==undefined ? when : actx.currentTime;
+  const src = actx.createBufferSource();
+  src.buffer = getNoiseBuffer();
+  const filt = actx.createBiquadFilter();
+  filt.type = 'highpass'; filt.frequency.value = hp||1000;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(Math.max(gain||0.2,0.001), t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  src.connect(filt); filt.connect(g); g.connect(bus || sfxGain);
+  src.start(t); src.stop(t+dur+0.03);
+}
+
+// ---- sound effects ----
+function sfxJump(){ if(!actx)return; const t=actx.currentTime; tone(560,0.09,'square',0.20,t); tone(840,0.08,'square',0.14,t+0.05); }
+function sfxLand(){ if(!actx)return; noiseHit(0.05,0.14,undefined,undefined,300); tone(130,0.07,'triangle',0.18); }
+function sfxHurt(){ if(!actx)return; const t=actx.currentTime; sweep(260,90,0.16,'sawtooth',0.26,t); sweep(200,70,0.16,'sawtooth',0.18,t+0.05); }
+function sfxScare(){ if(!actx)return; const t=actx.currentTime; tone(920,0.05,'square',0.22,t); tone(1380,0.09,'square',0.18,t+0.035); noiseHit(0.1,0.16,t,undefined,1500); }
+function sfxPickup(){ if(!actx)return; const t=actx.currentTime; [660,880,1320].forEach((f,i)=>tone(f,0.08,'square',0.20,t+i*0.055)); }
+function sfxUpgrade(){ if(!actx)return; const t=actx.currentTime; [660,880,1100,1480].forEach((f,i)=>tone(f,0.10,'square',0.22,t+i*0.06)); }
+function sfxRefuel(){ if(!actx)return; const t=actx.currentTime; tone(440,0.10,'triangle',0.20,t); tone(660,0.14,'triangle',0.18,t+0.09); }
+function sfxMount(){ if(!actx)return; const t=actx.currentTime; sweep(180,340,0.14,'sawtooth',0.2,t); }
+function sfxWreck(){ if(!actx)return; noiseHit(0.22,0.30,undefined,undefined,200); sweep(160,60,0.28,'sawtooth',0.24); }
+function sfxDanger(){ if(!actx)return; const t=actx.currentTime; tone(210,0.14,'square',0.22,t); tone(210,0.14,'square',0.22,t+0.19); }
+function sfxDefuse(){ if(!actx)return; const t=actx.currentTime; [520,780,1040].forEach((f,i)=>tone(f,0.12,'triangle',0.20,t+i*0.09)); }
+function sfxSmash(){ if(!actx)return; noiseHit(0.14,0.28,undefined,undefined,250); tone(110,0.10,'square',0.2); }
+function sfxMenu(){ if(!actx)return; const t=actx.currentTime; tone(700,0.05,'square',0.18,t); tone(1000,0.06,'square',0.18,t+0.05); }
+function sfxWin(){ if(!actx)return; const t=actx.currentTime; [523,659,784,1046].forEach((f,i)=>tone(f,0.18,'square',0.24,t+i*0.13)); }
+function sfxDead(){ if(!actx)return; const t=actx.currentTime; [420,340,270,190].forEach((f,i)=>tone(f,0.24,'sawtooth',0.20,t+i*0.15)); }
+
+// route each icon kind to a matching sound, so every existing popIcon()
+// call site gets audio for free with no per-callsite wiring needed
+function playIconSfx(kind){
+  switch(kind){
+    case 'fuel': case 'heat': case 'repair': sfxRefuel(); break;
+    case 'fuelout': sfxDanger(); break;
+    case 'ammo': sfxPickup(); break;
+    case 'upgrade': sfxUpgrade(); break;
+    case 'vehicle': sfxMount(); break;
+    case 'vehicleloss': sfxWreck(); break;
+    case 'hurt': sfxHurt(); break;
+    case 'danger': sfxDanger(); break;
+    case 'defused': sfxDefuse(); break;
+    case 'smash': sfxSmash(); break;
+    case 'scare': sfxScare(); break;
+  }
+}
+
+// ---- two looping chiptune tracks, synthesized step-sequencer style ----
+// Same instrumentation and harmonic language (square lead, triangle bass,
+// filtered-noise hats) so they read as a matched pair, per spec — the
+// title theme is slower and airier, the trail theme faster and driving.
+const NOTE_MIDI = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+function noteFreq(nn){
+  if (!nn) return 0;
+  const m = /^([A-G])(#|b)?(\d)$/.exec(nn);
+  if (!m) return 0;
+  const semi = NOTE_MIDI[m[1]] + (m[2]==='#'?1:m[2]==='b'?-1:0);
+  const midi = (parseInt(m[3],10)+1)*12 + semi;
+  return 440 * Math.pow(2, (midi-69)/12);
+}
+// One track per leg of the route, plus the secret level and the title
+// theme — seven pieces total, each in a different key/tempo/character so
+// none of the six "reward" tracks are mistakable for the title theme or
+// for each other, per spec.
+const TRACKS = {
+  title: {
+    bpm: 104,
+    lead: ['E5',0,'G5',0, 'A5',0,'G5',0, 'E5',0,'D5',0, 'C5',0,0,0,
+           'D5',0,'E5',0, 'D5',0,'C5',0, 'B4',0,'D5',0, 'C5',0,0,0],
+    bass: ['A3',0,0,0, 'F3',0,0,0, 'G3',0,0,0, 'C3',0,0,0,
+           'F3',0,0,0, 'G3',0,0,0, 'A3',0,0,0, 'A2',0,0,0],
+    hat: 0.5,
+  },
+  // L1 — Rocky Bar to Atlanta: cold, isolated, lots of open space
+  l1: {
+    bpm: 116,
+    lead: ['D5',0,'F5',0,'E5',0,'D5',0, 0,0,'A4',0,0,0,0,0,
+           'C5',0,'D5',0,'A4',0,0,0, 'F4',0,'D4',0,0,0,0,0],
+    bass: ['D3',0,0,0,0,0,0,0, 'A2',0,0,0,0,0,0,0,
+           'F3',0,0,0,0,0,0,0, 'C3',0,0,0,'D3',0,0,0],
+    hat: 0.28,
+  },
+  // L2 — Atlanta to Junction Bar: mechanical, driving, industrial
+  l2: {
+    bpm: 144,
+    lead: ['G4','Bb4','D5',0, 'D5',0,'C5','D5', 'Bb4',0,'G4',0, 'Bb4','C5','D5',0,
+           'Eb5','D5','C5',0, 'D5',0,'C5','Bb4', 'G4',0,'F4',0, 'G4','A4','Bb4',0],
+    bass: ['G2',0,'G2',0, 'D2',0,'D2',0, 'C2',0,'C2',0, 'D2',0,'D2',0,
+           'Eb2',0,'Eb2',0, 'D2',0,'D2',0, 'C2',0,'C2',0, 'G2',0,'G2',0],
+    hat: 0.42,
+  },
+  // L3 — Junction Bar to Pine Grove: slow, spacious, elegiac
+  l3: {
+    bpm: 88,
+    lead: ['A4',0,0,0,'G4',0,0,0, 'E4',0,0,0,0,0,0,0,
+           'C5',0,0,0,'B4',0,0,0, 'A4',0,0,0,0,0,0,0],
+    bass: ['A2',0,0,0,0,0,0,0, 'F2',0,0,0,0,0,0,0,
+           'C3',0,0,0,0,0,0,0, 'E2',0,0,0,0,0,0,0],
+    hat: 0.10,
+  },
+  // L4 — Pine Grove to Dixie: bright, syncopated, work-song energy
+  l4: {
+    bpm: 158,
+    lead: ['C5','C5',0,'E5', 'G5',0,'E5',0, 'F5','F5',0,'A5', 'G5',0,'E5',0,
+           'C5','C5',0,'E5', 'D5',0,'C5',0, 'G4',0,'A4',0, 'C5',0,0,0],
+    bass: ['C3',0,'C3',0, 'C3',0,'C3',0, 'F3',0,'F3',0, 'F3',0,'F3',0,
+           'C3',0,'C3',0, 'G2',0,'G2',0, 'A2',0,'A2',0, 'C3',0,'C3',0],
+    hat: 0.55,
+  },
+  // L5 — Dixie to Mountain Home: the most "modern," driving and open
+  l5: {
+    bpm: 136,
+    lead: ['C5','E5','G5',0, 'E5',0,'D5','E5', 'C5',0,'A4',0, 'C5','D5','E5',0,
+           'D5','F5','A5',0, 'F5',0,'E5','F5', 'D5',0,'C5',0, 'D5','E5','C5',0],
+    bass: ['C3',0,'C3',0, 'A2',0,'A2',0, 'F2',0,'F2',0, 'G2',0,'G2',0,
+           'D3',0,'D3',0, 'A2',0,'A2',0, 'G2',0,'G2',0, 'C3',0,'C3',0],
+    hat: 0.25,
+  },
+  // L6 — Mountain Home to Pine: crossing the reservoir. Slow, sparse,
+  // minor-key, with long sustained bass notes evoking still water —
+  // deliberately the quietest, most spacious track in the game
+  l6: {
+    bpm: 78,
+    lead: ['D5',0,0,0,0,0,0,0, 'F5',0,0,0,0,0,0,0,
+           'A4',0,0,0,0,0,0,0, 'E5',0,0,0,'D5',0,0,0],
+    bass: ['D3',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+           'A2',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    hat: 0.08,
+  },
+  // Secret level — bouncy, primitive, square-wave only (no bass voice),
+  // meant to read as more "1982 console" than the main game's music
+  pickaxe: {
+    bpm: 150,
+    lead: ['E5','G5','A5','B5', 'A5','G5','E5',0, 'D5','E5','G5','A5', 'G5','E5','D5',0,
+           'E5','G5','A5','B5', 'D6',0,'B5',0, 'A5','G5','E5','D5', 'E5',0,0,0],
+    bass: new Array(32).fill(0),
+    hat: 0.5,
+  },
+};
+let musicTrackName = null, musicStep = 0, nextStepTime = 0, musicTimer = null;
+
+function stepDur(bpm){ return 60/bpm/4; } // 16th-note grid
+
+function scheduleMusic(){
+  if (!actx || !musicTrackName) return;
+  const trk = TRACKS[musicTrackName];
+  const sd = stepDur(trk.bpm);
+  while (nextStepTime < actx.currentTime + 0.14) {
+    const i = musicStep % trk.lead.length;
+    const lead = trk.lead[i], bass = trk.bass[i];
+    if (lead) tone(noteFreq(lead), sd*0.85, 'square', 0.13, nextStepTime, musicGain);
+    if (bass) tone(noteFreq(bass), sd*2.4, 'triangle', 0.12, nextStepTime, musicGain);
+    if (i%2===0) noiseHit(0.02, trk.hat*0.09, nextStepTime, musicGain, 4000);
+    nextStepTime += sd;
+    musicStep++;
+  }
+}
+
+function playMusic(name){
+  if (!actx || musicTrackName===name) return;
+  musicTrackName = name;
+  musicStep = 0;
+  nextStepTime = actx.currentTime + 0.05;
+  if (!musicTimer) musicTimer = setInterval(scheduleMusic, 40);
+}
+function stopMusic(){
+  musicTrackName = null;
+  if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
+}
+
+// ---- track unlocks + jukebox ----
+// Session-only (no localStorage — this file may run inside a sandboxed
+// artifact preview where browser storage isn't available). Unlocks reset
+// on reload; that's an accepted tradeoff for staying a single static file.
+let unlockedTracks = new Set(['title']);
+let jukeboxOpen = false, jukeboxSel = 0;
+const TRACK_ORDER = ['title','l1','l2','l3','l4','l5','l6','pickaxe'];
+const TRACK_INFO = {
+  title:  "MAIN THEME",
+  l1: "LEG 1 \u2014 ROCKY BAR TO ATLANTA",
+  l2: "LEG 2 \u2014 ATLANTA TO JUNCTION BAR",
+  l3: "LEG 3 \u2014 JUNCTION BAR TO PINE GROVE",
+  l4: "LEG 4 \u2014 PINE GROVE TO DIXIE",
+  l5: "LEG 5 \u2014 DIXIE TO MOUNTAIN HOME",
+  l6: "LEG 6 \u2014 MOUNTAIN HOME TO PINE",
+  pickaxe: "SECRET \u2014 PICK AXE PETE!",
+};
+function unlockTrack(name){
+  if (!TRACKS[name] || unlockedTracks.has(name)) return;
+  unlockedTracks.add(name);
+  sfxUpgrade();
+}
+
+// Renders a track offline (a few loops) into an AudioBuffer, independent
+// of whatever is currently playing live, so it can be turned into a
+// downloadable .wav — the "legitimate reward" for reaching that leg.
+function renderTrackBuffer(name, loops){
+  const trk = TRACKS[name];
+  const sr = 22050;
+  const sd = 60/trk.bpm/4;
+  const totalSteps = trk.lead.length * (loops||4);
+  const totalSec = sd*totalSteps + 0.6;
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const octx = new OAC(1, Math.ceil(sr*totalSec), sr);
+  const mg = octx.createGain(); mg.gain.value = 0.7; mg.connect(octx.destination);
+  let noiseBuf = null;
+  function oNoiseBuf(){
+    if (noiseBuf) return noiseBuf;
+    const len = Math.floor(sr*0.5);
+    noiseBuf = octx.createBuffer(1, len, sr);
+    const d = noiseBuf.getChannelData(0);
+    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
+    return noiseBuf;
+  }
+  function oTone(freq, dur, type, gain, when){
+    if (!freq) return;
+    const osc = octx.createOscillator(); osc.type = type;
+    osc.frequency.setValueAtTime(freq, when);
+    const g = octx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(Math.max(gain,0.001), when+0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, when+dur);
+    osc.connect(g); g.connect(mg);
+    osc.start(when); osc.stop(when+dur+0.03);
+  }
+  function oNoise(dur, gain, when, hp){
+    const src = octx.createBufferSource(); src.buffer = oNoiseBuf();
+    const filt = octx.createBiquadFilter(); filt.type='highpass'; filt.frequency.value = hp||1000;
+    const g = octx.createGain();
+    g.gain.setValueAtTime(Math.max(gain,0.001), when);
+    g.gain.exponentialRampToValueAtTime(0.0001, when+dur);
+    src.connect(filt); filt.connect(g); g.connect(mg);
+    src.start(when); src.stop(when+dur+0.03);
+  }
+  let t = 0.05;
+  for (let step=0; step<totalSteps; step++){
+    const i = step % trk.lead.length;
+    if (trk.lead[i]) oTone(noteFreq(trk.lead[i]), sd*0.85, 'square', 0.16, t);
+    if (trk.bass[i]) oTone(noteFreq(trk.bass[i]), sd*2.4, 'triangle', 0.15, t);
+    if (i%2===0) oNoise(0.02, trk.hat*0.11, t, 4000);
+    t += sd;
+  }
+  return octx.startRendering();
+}
+
+function audioBufferToWav(buffer){
+  const numCh = buffer.numberOfChannels, len = buffer.length, sr = buffer.sampleRate;
+  const blockAlign = numCh*2, dataSize = len*blockAlign;
+  const ab = new ArrayBuffer(44+dataSize);
+  const view = new DataView(ab);
+  function writeStr(off,str){ for (let i=0;i<str.length;i++) view.setUint8(off+i, str.charCodeAt(i)); }
+  writeStr(0,'RIFF'); view.setUint32(4, 36+dataSize, true); writeStr(8,'WAVE');
+  writeStr(12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+  view.setUint16(22,numCh,true); view.setUint32(24,sr,true);
+  view.setUint32(28, sr*blockAlign, true); view.setUint16(32, blockAlign, true); view.setUint16(34,16,true);
+  writeStr(36,'data'); view.setUint32(40, dataSize, true);
+  const chData = []; for (let c=0;c<numCh;c++) chData.push(buffer.getChannelData(c));
+  let offset = 44;
+  for (let i=0;i<len;i++){
+    for (let c=0;c<numCh;c++){
+      const s = Math.max(-1, Math.min(1, chData[c][i]));
+      view.setInt16(offset, s<0 ? s*0x8000 : s*0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([ab], {type:'audio/wav'});
+}
+
+function downloadTrack(name){
+  if (!unlockedTracks.has(name) || !actx) return;
+  renderTrackBuffer(name, 4).then(buf => {
+    const blob = audioBufferToWav(buf);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'MAILTO_'+name+'.wav';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  });
+}
+
+
+function rand(a,b){ return a + Math.random()*(b-a); }
+function chance(p){ return Math.random() < p; }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function aabb(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
+
+// ---------- THE CARRIER ----------
+// Nameless, androgynous. Who they are matters less than what they carry.
+const CARRIER = { coat:"#b23b2e", trim:"#f2ead8", scarf:"#e8b23c", skin:"#e9c49a" };
+const ROSTER = [CARRIER];
+let chosenIdx = 0;
+
+// ---------- WEAPON PROGRESSION ----------
+// Non-lethal by design: every tier is a louder/bigger deterrent, not a kill tool.
+// Tier 2 (Blasting Charge) doubles as controlled-avalanche mitigation.
+const WEAPON_TIERS = [
+  { name:"Signal Flare",   radius:150, cooldown:26, canClearChute:false, color:"#ffcf6b" },
+  { name:"Cracker Shell",  radius:215, cooldown:19, canClearChute:false, color:"#ff9d4d" },
+  { name:"Blasting Charge",radius:260, cooldown:36, canClearChute:true,  color:"#c9c9c9" },
+];
+
+// ---------- LEVELS ----------
+// Same underlying obstacle engine, reskinned per level. Internal type
+// strings (ice/drift/gap/log/chute/cabin/sled) stay constant; only the
+// palette, labels, and enemy species change.
+const LEVELS = [
+  {
+    idx:1, key:'winter', length:9000,
+    title:"MAILTO", subtitle:"Rocky Bar to Atlanta",
+    tagline:"Winter Route \u2014 16 miles, one mail sack, and a mountain that always bats last.",
+    meterLabel:"STORM", zoneLabel:"AVALANCHE CHUTE", zoneShout:"AVALANCHE!", zoneRunShout:"AVALANCHE \u2014 RUN!",
+    waypointLabel:"RELAY", vehicleLabel:"SLED", destLabel:"ATLANTA P.O.",
+    smallEnemy:"squirrel", smallEnemyName:"Rabid squirrel!", bigEnemy:"wolf", bigEnemyName:"A wolf caught your trail!",
+    sky:["#cfe6f2","#e9f2f6","#f6f8f4"], ridgeFar:"#a9c2d6", ridgeMid:"#8fb0c9",
+    treeMid:"#4c6b52", treeMidShade:"#3d5a44", treeNear:"#2e4a35",
+    ground:"#eef4f2", groundDot:"#d7e6e2",
+    iceColor:"rgba(150,210,235,0.65)", driftColor:"#ffffff", driftShade:"rgba(190,210,220,0.5)",
+    gapColor:"#233a4a", gapLight:"#31506a", logColor:"#6b4a2a", logLight:"#8a6338",
+    cabinColor:"#6b4a2a", cabinRoof:"#4a3018", vehicleBody:"#6b4a2a", vehicleRunner:"#c9c9c9",
+    smallColor:"#8a6338", bigColor:"#5a5f66",
+    waypointMsg:"Relay cabin \u2014 warm up, restock flares", vehicleMsg:"Hitched a horse sled!",
+    wallHitMsg:"Buried! The mountain always wins the argument.",
+    chuteForcesDismount:true,
+    deadTitle:"MOTHER NATURE BATS LAST", deadSubtitle:"The mountain wasn't cruel. It was just indifferent \u2014 and that was enough.",
+    finishNote:"Between 1892 and 1913, seven real carriers on this exact route never finished their run. One man's body wasn't found until the following June. You made it. Not everyone did.",
+    nextNote:"ONWARD \u2014 the road drops out of the snowline toward Junction Bar.",
+  },
+  {
+    idx:2, key:'dredge', length:8200,
+    title:"THE DREDGE FIELDS", subtitle:"Atlanta to Junction Bar",
+    tagline:"Same river. Different danger. The mountain didn't do this \u2014 the company did.",
+    meterLabel:"DREDGE ACTIVITY", zoneLabel:"TAILINGS DUMP ZONE", zoneShout:"SHE'S DUMPING!", zoneRunShout:"TAILINGS SLIDE \u2014 RUN!",
+    waypointLabel:"CAMP", vehicleLabel:"ORE CART", destLabel:"JUNCTION BAR P.O.",
+    smallEnemy:"horsefly", smallEnemyName:"Horsefly swarm!", bigEnemy:"elk", bigEnemyName:"A spooked elk bolted through!",
+    sky:["#cdd0c2","#dcdccb","#eae7d6"], ridgeFar:"#a49b82", ridgeMid:"#8c8268",
+    treeMid:"#6b6a4a", treeMidShade:"#5a5940", treeNear:"#454732",
+    ground:"#c9c3ab", groundDot:"#b4ab8c",
+    iceColor:"rgba(140,150,110,0.55)", driftColor:"#a89f82", driftShade:"rgba(120,112,88,0.5)",
+    gapColor:"#4a5240", gapLight:"#8a9470", logColor:"#5a4530", logLight:"#7a6142",
+    cabinColor:"#5a4530", cabinRoof:"#3a2c1c", vehicleBody:"#4a3a28", vehicleRunner:"#8a7a5a",
+    smallColor:"#3a3a28", bigColor:"#6b5a42",
+    waypointMsg:"Camp \u2014 warm meal, restock flares", vehicleMsg:"Hopped an ore cart!",
+    wallHitMsg:"Buried in tailings. The company never counted this against the mail.",
+    chuteForcesDismount:true,
+    deadTitle:"THE COMPANY DOESN'T STOP FOR YOU", deadSubtitle:"Nobody up at the dredge even felt it. That was never going to be a fair fight.",
+    finishNote:"The South Park dredge worked this stretch of river from 1922 to 1927 and pulled over 33,000 ounces of gold out of it. Its burned-out hull is still sitting in a pond near Junction Bar today. The mail still had to get through it.",
+    nextNote:"ONWARD \u2014 the boom's over up ahead. Pine Grove is mostly memory now.",
+  },
+  {
+    idx:3, key:'decline', length:8600,
+    title:"THE LONG QUIET", subtitle:"Junction Bar to Pine Grove",
+    tagline:"The gold's mostly gone. The mail still isn't done.",
+    meterLabel:"GROUND RISK", zoneLabel:"UNSTABLE SHAFT", zoneShout:"SHE'S CAVING!", zoneRunShout:"CAVE-IN \u2014 RUN!",
+    waypointLabel:"LINE SHACK", vehicleLabel:"ORE WAGON", destLabel:"PINE GROVE P.O.",
+    smallEnemy:"squirrel", smallEnemyName:"A packrat bolted out of the timbers!", bigEnemy:"wolf", bigEnemyName:"A bobcat broke from the brush!",
+    sky:["#c7c4bc","#d8d4c8","#e6e0d0"], ridgeFar:"#a39d8e", ridgeMid:"#8d8574",
+    treeMid:"#63614c", treeMidShade:"#514f3d", treeNear:"#3c3a2c",
+    ground:"#bcb49f", groundDot:"#a89f86",
+    iceColor:"rgba(160,150,130,0.5)", driftColor:"#9c9480", driftShade:"rgba(100,94,78,0.5)",
+    gapColor:"#3a3830", gapLight:"#6a6250", logColor:"#4a3f2e", logLight:"#6a5a40",
+    cabinColor:"#4a3f2e", cabinRoof:"#2e2418", vehicleBody:"#5a4a34", vehicleRunner:"#3a3226",
+    smallColor:"#5a4a38", bigColor:"#4a4038",
+    waypointMsg:"Line shack \u2014 patched roof, restock flares", vehicleMsg:"Hitched an ore wagon!",
+    wallHitMsg:"The shaft gave way underfoot. Old workings don't warn you first.",
+    chuteForcesDismount:true,
+    deadTitle:"NOBODY WAS LOOKING FOR YOU HERE", deadSubtitle:"Half the district had already packed up and left. That's the trouble with a ghost town \u2014 nobody comes looking.",
+    finishNote:"The Franklin lode paid out roughly $750,000 in gold and silver before the mine closed in 1917. By the time this route was still being walked, Pine Grove was already mostly memory \u2014 a few families, a line shack or two, and a post office that outlasted the boom by decades.",
+    nextNote:"ONWARD \u2014 the CCC boys are cutting a new grade toward Dixie, and it isn't finished yet.",
+  },
+  {
+    idx:4, key:'construction', length:8800,
+    title:"THE NEW GRADE", subtitle:"Pine Grove to Dixie",
+    tagline:"The Civilian Conservation Corps is building the road out from under you \u2014 today.",
+    meterLabel:"BLAST RISK", zoneLabel:"BLASTING ZONE", zoneShout:"FIRE IN THE HOLE!", zoneRunShout:"BLASTING \u2014 RUN!",
+    waypointLabel:"CCC CAMP", vehicleLabel:"WORK TRUCK", destLabel:"DIXIE P.O.",
+    smallEnemy:"squirrel", smallEnemyName:"A chipmunk shot across the grade!", bigEnemy:"wolf", bigEnemyName:"A black bear broke from the cut bank!",
+    sky:["#e6ceA0","#f0dcae","#f6e8c4"], ridgeFar:"#c2a473", ridgeMid:"#ab8d5c",
+    treeMid:"#7a7444", treeMidShade:"#645f36", treeNear:"#484428",
+    ground:"#d0b586", groundDot:"#bd9f6c",
+    iceColor:"rgba(200,175,120,0.5)", driftColor:"#e0c896", driftShade:"rgba(170,145,95,0.5)",
+    gapColor:"#5c4626", gapLight:"#8f7040", logColor:"#553c22", logLight:"#7a5c34",
+    cabinColor:"#6b5230", cabinRoof:"#3a2c1a", vehicleBody:"#4c5a34", vehicleRunner:"#2a2a2a",
+    smallColor:"#8a7248", bigColor:"#3a332a",
+    waypointMsg:"CCC camp \u2014 mess-tent meal, restock flares", vehicleMsg:"Caught a ride on a work truck!",
+    wallHitMsg:"Caught the shot too close. That's what the whistle was for.",
+    chuteForcesDismount:false,
+    deadTitle:"THE WHISTLE BLEW TWICE", deadSubtitle:"Once to warn you, once because you didn't move. The grade gets finished either way.",
+    finishNote:"CCC crews graded roads through the Boise National Forest all through the 1930s, camp by camp, blast by blast, until the war took the boys and the budget both in 1942. This stretch toward Dixie was some of the last of it \u2014 raw, unfinished, and already being driven before the dust settled.",
+    nextNote:"ONWARD \u2014 the finished road, and the last long haul to Mountain Home.",
+  },
+  {
+    idx:5, key:'roads', length:15000, fuelMode:true,
+    title:"THE LONG HAUL", subtitle:"Dixie to Mountain Home, 1946",
+    tagline:"The CCC boys built the roads. That doesn't mean the mountain signed off on them.",
+    resourceLabel:"GASOLINE",
+    meterLabel:"FIRE RISK", zoneLabel:"WILDFIRE FLARE-UP", zoneShout:"SHE'S CATCHING!", zoneRunShout:"WILDFIRE \u2014 RUN!",
+    waypointLabel:"DEPOT", vehicleLabel:"MAIL JEEP", destLabel:"MOUNTAIN HOME P.O.",
+    smallEnemy:"squirrel", smallEnemyName:"A mule deer bolted into the road!", bigEnemy:"wolf", bigEnemyName:"A coyote pack ran the Jeep off-line!",
+    sky:["#e8c896","#f0d9a8","#f6ecc8"], ridgeFar:"#b89968", ridgeMid:"#a3814f",
+    treeMid:"#6b7a42", treeMidShade:"#57642f", treeNear:"#3f4a1f",
+    ground:"#c7b083", groundDot:"#b39865",
+    iceColor:"rgba(180,160,120,0.55)", driftColor:"#d8c398", driftShade:"rgba(150,130,90,0.5)",
+    gapColor:"#5a4020", gapLight:"#8a6a3a", logColor:"#4a3320", logLight:"#6b4a2e",
+    cabinColor:"#5a4a30", cabinRoof:"#3a2c1c", vehicleBody:"#4a5c34", vehicleRunner:"#2b2b2b",
+    smallColor:"#8a6a42", bigColor:"#6b5a3e",
+    waypointMsg:"CCC depot \u2014 fuel up, patch the tires",
+    wallHitMsg:"Caught in the flare-up! The Jeep's not built for that kind of heat.",
+    deadTitle:"THE ROAD RAN OUT", deadSubtitle:"Machines get you further. They don't get you free.",
+    finishNote:"By 1946 a war-surplus Weasel could do in an afternoon what a carrier on skis once risked his life for in a day. The road from Dixie to Mountain Home closed the loop the 1864 toll road first opened \u2014 Mountain Home, Dixie, Pine Grove, Junction Bar, Rocky Bar \u2014 eighty-two years apart, same six post offices, same mountain in between.",
+    nextNote:"ONWARD \u2014 the mail doesn't stop at the gateway. It turns around and goes home.",
+    chuteForcesDismount:false,
+    phase2: {
+      at: 0.6,
+      title:"THE LONG HAUL", subtitle:"The snow line, 1946",
+      resourceLabel:"GASOLINE",
+      meterLabel:"STORM", zoneLabel:"AVALANCHE CHUTE", zoneShout:"AVALANCHE!", zoneRunShout:"AVALANCHE \u2014 RUN!",
+      waypointLabel:"WAY STATION", vehicleLabel:"WEASEL",
+      smallEnemyName:"A snowshoe hare panicked under the tracks!", bigEnemyName:"A wolf pack tested the Weasel's flank!",
+      sky:["#cfe0ea","#e3edf2","#f2f5f2"], ridgeFar:"#9fb5c9", ridgeMid:"#88a0b8",
+      treeMid:"#41594a", treeMidShade:"#34473c", treeNear:"#28382f",
+      ground:"#e6edf0", groundDot:"#d0dde2",
+      iceColor:"rgba(160,205,230,0.6)", driftColor:"#ffffff", driftShade:"rgba(190,210,220,0.5)",
+      gapColor:"#26384a", gapLight:"#34506a", logColor:"#5a4530", logLight:"#7a6142",
+      cabinColor:"#5a4530", cabinRoof:"#3a2c1c", vehicleBody:"#4a4a4a", vehicleRunner:"#1f1f1f",
+      smallColor:"#8a6338", bigColor:"#5a5f66",
+      waypointMsg:"Way station \u2014 fuel the Weasel, warm up",
+      wallHitMsg:"Buried! Tracks don't argue with a mountain that's already moving.",
+      deadTitle:"THE WEASEL WASN'T ENOUGH", deadSubtitle:"Tracks don't argue with a mountain that's already moving.",
+    },
+  },
+  {
+    idx:6, key:'reservoir', length:9200, mirrored:true,
+    title:"THE DROWNED VALLEY", subtitle:"Mountain Home to Pine, after 1951",
+    tagline:"The mountain let the mail through every time. The dam didn't ask anyone's permission at all.",
+    resourceLabel:"WARMTH",
+    meterLabel:"COLD SHOCK", zoneLabel:"UNDERTOW ZONE", zoneShout:"SHE'S PULLING!", zoneRunShout:"UNDERTOW \u2014 SWIM!",
+    waypointLabel:"DOCK", vehicleLabel:"ROWBOAT", destLabel:"PINE P.O.",
+    smallEnemy:"squirrel", smallEnemyName:"A startled loon dove right under the bow!", bigEnemy:"wolf", bigEnemyName:"A beaver slapped the water and rammed the boat!",
+    sky:["#b9c2c6","#c9d0d2","#d8dcda"], ridgeFar:"#889498", ridgeMid:"#6e7a80",
+    treeMid:"#465052", treeMidShade:"#384042", treeNear:"#242c2e",
+    ground:"#4a6068", groundDot:"#324248",
+    iceColor:"rgba(200,220,225,0.5)", driftColor:"#6a7e82", driftShade:"rgba(40,54,58,0.55)",
+    gapColor:"#101c22", gapLight:"#22383e", logColor:"#3a3630", logLight:"#565048",
+    cabinColor:"#3a4a4e", cabinRoof:"#242e30", vehicleBody:"#6b4a30", vehicleRunner:"#3a2c1c",
+    smallColor:"#5a6a68", bigColor:"#3a322c",
+    waypointMsg:"Dock \u2014 dry out, restock flares",
+    wallHitMsg:"The undertow had you before you felt it pull. Cold water doesn't announce itself.",
+    chuteForcesDismount:false,
+    deadTitle:"THE WATER DOESN'T GIVE THINGS BACK", deadSubtitle:"Everything under this reservoir is still down there. It just doesn't send mail anymore.",
+    finishNote:"This valley was never empty ground waiting for a name. Bannock and Sheepeater (Tukudika) people lived across this country for thousands of years before Rocky Bar had a post office, long before anyone here had heard of gold. Anderson Ranch Dam went fully operational in 1951, and the reservoir behind it drowned Pine Grove for good \u2014 homes, workings, the whole townsite, still down there. A new town called Pine went up where the Dixie-Featherville road crosses the river, right at the water's edge, and got the post office. The mail still had to get there. It just had to cross what was lost to do it.",
+    nextNote:"MAILTO IS COMPLETE. The valley is quieter now, and colder, and it remembers everything.",
+  },
+];
+function curLevel(){
+  const idx = (world && world.levelIdx ? world.levelIdx : 1) - 1;
+  const base = LEVELS[idx];
+  if (base.phase2 && world && world.length && (world.x / world.length) >= base.phase2.at) {
+    return Object.assign({}, base, base.phase2, { phase2Active:true });
+  }
+  return base;
+}
+// true for any level/phase whose weather is dry/dusty rather than cold/snowy —
+// governs shared atmosphere styling (bloom color, particulate type, breath fog,
+// cheek flush) across the several warm-era legs without hardcoding each one
+function isDry(lv){
+  return lv.key==='dredge' || lv.key==='decline' || lv.key==='construction'
+      || (lv.key==='roads' && !lv.phase2Active);
+}
+
+// ---------- GAME STATE ----------
+const STATE = { TITLE:'TITLE', PLAY:'PLAY', INTERSTITIAL:'INTERSTITIAL', WIN:'WIN', DEAD:'DEAD', PICKAXE:'PICKAXE' };
+let state = STATE.TITLE;
+
+let world, player, cam, particles, floaters;
+let pa = null, paState = 'PLAY';
+let paParticles = [], paFloaters = [];
+
+function newWorld(levelIdx){
+  levelIdx = levelIdx || 1;
+  return {
+    levelIdx,
+    x: 0,               // player's worldX progress
+    length: LEVELS[levelIdx-1].length,
+    time: 0,
+    storm: 8,            // 0-100, danger meter, rises over time
+    obstacles: [],       // static: ice, drift, gap, log, chute-marker, cabin, sled, upgrade, flag
+    enemies: [],         // small/big species per level
+    nextSpawnX: 260,
+    avalanche: null,     // {wallX, speed, active}
+    shakeT: 0,
+    ended: false,
+  };
+}
+
+function newPlayer(){
+  return {
+    x: 40, y: GROUND_Y, w: 26, h: 40,
+    vx: 0, vy: 0,
+    onGround: true,
+    facing: 1,
+    ducking: false,
+    walkT: 0,
+    hurtT: 0,
+    invT: 0,
+    warmth: 100,
+    mail: 100,
+    flares: 3,
+    weaponTier: 0,
+    vehicle: null,     // null | 'sled'
+    sledHP: 0,
+    vehicleStalled: false,
+    onIce: false,
+    onDrift: false,
+    dead: false,
+  };
+}
+
+function resetGame(levelIdx, keepProgress){
+  const carryTier = (keepProgress && player) ? player.weaponTier : 0;
+  world = newWorld(levelIdx || 1);
+  player = newPlayer();
+  player.weaponTier = carryTier;
+  if (LEVELS[(levelIdx||1)-1].fuelMode) {
+    player.vehicle = 'sled';
+    player.sledHP = 100;
+  }
+  cam = { x: 0, shakeX:0, shakeY:0 };
+  particles = [];
+  floaters = [];
+}
+
+// ---------- LEVEL GENERATION (procedural, seeded by distance) ----------
+function maybeSpawn(){
+  while (world.nextSpawnX < world.x + W + 400) {
+    const x = world.nextSpawnX;
+    const progress = x / world.length; // 0..1
+    const danger = clamp(progress*0.7 + world.storm/140, 0, 1);
+    const roll = Math.random();
+
+    // Relay cabins roughly every ~2200-2600 ft
+    const wpGap = curLevel().fuelMode ? 2900 : 1900;
+    const wpForce = curLevel().fuelMode ? 3800 : 2600;
+    if (x > 200 && (world._lastCabin === undefined || x - world._lastCabin > wpGap)) {
+      if (chance(0.6) || x - (world._lastCabin||0) > wpForce) {
+        world.obstacles.push({ type:'cabin', x, w:70, h:110, y: GROUND_Y-110, used:false });
+        world._lastCabin = x;
+        world.nextSpawnX = x + rand(500,700);
+        continue;
+      }
+    }
+
+    // Horse-drawn sleds — mountable on the flatter wagon-road stretches,
+    // but useless (and dangerous) once the trail hits a chute or crevasse.
+    if (x > 900 && (world._lastSled === undefined || x - world._lastSled > 2400)) {
+      if (chance(0.5)) {
+        world.obstacles.push({ type:'sled', x, w:54, h:26, y: GROUND_Y-24, taken:false });
+        world._lastSled = x;
+        world.nextSpawnX = x + rand(260,420);
+        continue;
+      }
+    }
+
+    // Weapon upgrade caches — two one-time crates along the route
+    world._upgradesPlaced = world._upgradesPlaced || 0;
+    if (world._upgradesPlaced === 0 && progress > 0.32) {
+      world.obstacles.push({ type:'upgrade', x, w:26, h:22, y: GROUND_Y-22, taken:false });
+      world._upgradesPlaced = 1;
+      world.nextSpawnX = x + rand(220,340);
+      continue;
+    }
+    if (world._upgradesPlaced === 1 && progress > 0.68) {
+      world.obstacles.push({ type:'upgrade', x, w:26, h:22, y: GROUND_Y-22, taken:false });
+      world._upgradesPlaced = 2;
+      world.nextSpawnX = x + rand(220,340);
+      continue;
+    }
+
+    // The inundation memorial — placed once, roughly mid-crossing, on a
+    // small rise still above the waterline
+    if (curLevel().key==='reservoir' && !world._monumentPlaced && progress > 0.46) {
+      world.obstacles.push({ type:'monument', x, w:34, h:46, y: GROUND_Y-46 });
+      world._monumentPlaced = true;
+      world.nextSpawnX = x + rand(260,380);
+      continue;
+    }
+
+    // --- hazards ---
+    // Gaps are capped so a well-timed jump always clears them, and never
+    // appear back-to-back without a landing strip between.
+    let placedHazard = false;
+    if (roll < 0.17) {
+      world.obstacles.push({ type:'ice', x, w: rand(80,140), h:14, y: GROUND_Y+26 });
+      placedHazard = true;
+    } else if (roll < 0.31) {
+      world.obstacles.push({ type:'drift', x, w: rand(70,120), h:34, y: GROUND_Y-14 });
+      placedHazard = true;
+    } else if (roll < 0.44 && progress > 0.10 && (x - (world._lastGap||-9999)) > 420) {
+      // MAX_JUMP_GAP keeps every gap physically clearable at a run
+      const gw = Math.min(112, rand(58, 78 + danger*30));
+      world.obstacles.push({ type:'gap', x, w: gw, h:20, y: GROUND_Y+40 });
+      world._lastGap = x;
+      world.nextSpawnX = x + gw + rand(190, 300);   // guaranteed landing room
+      placedHazard = true;
+      continue;
+    } else if (roll < 0.55) {
+      world.obstacles.push({ type:'log', x, w: 34, h: 22, y: GROUND_Y-22 });
+      placedHazard = true;
+    } else if (roll < 0.66 && progress > 0.15 && (x - (world._lastChute||-9999)) > 1500) {
+      // danger corridor — spaced far apart so they stay events, not attrition
+      const cw = rand(240, 360);
+      world.obstacles.push({ type:'chute', x, w: cw, h:10, y: GROUND_Y-140, armed:true });
+      world._lastChute = x;
+      world.nextSpawnX = x + cw + rand(340, 520);
+      continue;
+    }
+
+    // --- wildlife ---
+    // Ramps with danger but is capped, and never stacks on top of a hazard
+    // the player is already dealing with.
+    const enemyChance = clamp(0.16 + danger*0.24, 0, 0.42) * (placedHazard ? 0.55 : 1);
+    if (chance(enemyChance) && (x - (world._lastEnemy||-9999)) > 240) {
+      world._lastEnemy = x;
+      if (chance(0.64) || progress <= 0.12) {
+        world.enemies.push({ type:'squirrel', x: x+rand(30,90), y: GROUND_Y-10, w:16, h:12, vx: -1.2, hp:1, state:'idle', t:rand(0,10) });
+      } else {
+        world.enemies.push({ type:'wolf', x: x+rand(40,110), y: GROUND_Y-30, w:34, h:22, vx:0, hp:2, state:'idle', t:rand(0,10) });
+      }
+    }
+
+    // Pacing: dense stretches alternate with open trail so the level breathes.
+    const beat = Math.floor(x/1400) % 3;
+    const spacing = beat===2 ? rand(320, 470) : rand(200, 330);
+    world.nextSpawnX = x + spacing - danger*40;
+  }
+  // finish flag
+  if (!world._flagPlaced && world.nextSpawnX > world.length - 400) {
+    world.obstacles.push({ type:'flag', x: world.length, w:24, h:120, y: GROUND_Y-120 });
+    world._flagPlaced = true;
+  }
+}
+
+// ---------- UPDATE ----------
+function update(dt){
+  if (state !== STATE.PLAY) return;
+
+  world.time += dt;
+  world.storm = clamp(world.storm + 0.0052*dt, 0, 100);
+  maybeSpawn();
+
+  // ---- player input / physics ----
+  const p = player;
+  p.vehicleActive = p.vehicle==='sled' && !p.vehicleStalled;
+  p.ducking = keys['ArrowDown'] || keys['KeyS'];
+  // this level scrolls right-to-left (see curLevel().mirrored), so the
+  // arrow that reads as "forward" on screen swaps too — everything else
+  // (world.x, vx sign, spawn logic) is untouched; only which key drives it
+  const swapDir = curLevel().mirrored;
+  const left = swapDir ? (keys['ArrowRight'] || keys['KeyD']) : (keys['ArrowLeft'] || keys['KeyA']);
+  const right = swapDir ? (keys['ArrowLeft'] || keys['KeyA']) : (keys['ArrowRight'] || keys['KeyD']);
+  const jump = keys['ArrowUp'] || keys['Space'];
+
+  if (!p.ducking) {
+    if (left) { p.vx -= MOVE_A*dt; p.facing = -1; }
+    if (right) { p.vx += MOVE_A*dt; p.facing = 1; }
+  }
+  const stallPenalty = (p.vehicle==='sled' && p.vehicleStalled) ? 0.55 : 1;
+  const vmax = (p.vehicleActive ? MAX_RUN*1.9 : MAX_RUN) * stallPenalty;
+  p.vx = clamp(p.vx, -vmax, vmax);
+
+  // --- forgiving jump: coyote time + input buffering + variable height ---
+  if (p.onGround) p.coyote = COYOTE_FRAMES; else p.coyote = Math.max(0, (p.coyote||0) - dt);
+  if (jump && !p._jumpHeld) p.jumpBuf = JUMP_BUFFER; else p.jumpBuf = Math.max(0, (p.jumpBuf||0) - dt);
+  p._jumpHeld = jump;
+
+  if (p.jumpBuf > 0 && p.coyote > 0 && !p.ducking) {
+    p.vy = JUMP_V;
+    p.onGround = false;
+    p.coyote = 0;
+    p.jumpBuf = 0;
+    spawnPuff(p.x+p.w/2, p.y+p.h, 5);
+    sfxJump();
+  }
+  // releasing jump on the way up cuts the arc short
+  if (!jump && p.vy < 0) p.vy *= Math.pow(1 - JUMP_CUT*0.14, dt);
+
+  p.vy += GRAVITY*dt;
+  p.y += p.vy*dt;
+
+  const fr = p.vehicleActive ? 0.9 : (p.onIce ? FRICTION_ICE : (p.onDrift ? FRICTION_DRIFT : FRICTION_GROUND));
+  p.vx *= Math.pow(fr, dt);
+
+  // ground collision (with gap handling)
+  const footWorldX = world.x + p.x + p.w/2;
+  const overGap = world.obstacles.some(o => o.type==='gap' && footWorldX > o.x && footWorldX < o.x+o.w);
+  const groundLevel = overGap ? GROUND_Y + 300 : GROUND_Y - p.h;
+
+  if (p.y >= groundLevel) {
+    p.y = groundLevel;
+    if (p.vy > 2 && !p.onGround) { spawnPuff(p.x+p.w/2, p.y+p.h, 3); sfxLand(); }
+    p.vy = 0;
+    p.onGround = true;
+  } else {
+    p.onGround = false;
+  }
+
+  if (overGap && p.y > GROUND_Y + 60 && p.invT<=0) {
+    const lv = curLevel();
+    const gapWord = lv.key==='dredge' ? "pond" : lv.key==='decline' ? "shaft" : lv.key==='reservoir' ? "channel" : (lv.key==='construction'||lv.key==='roads') ? "washout" : "crevasse";
+    if (p.vehicle==='sled') dismountSled(true, "The " + lv.vehicleLabel.toLowerCase() + " went into the " + gapWord + "!");
+    p.mail = clamp(p.mail - 10, 0, 100);
+    hurt(26, lv.key==='dredge' ? "Lost footing in the dredge pond!"
+      : lv.key==='decline' ? "The ground gave way into an old shaft!"
+      : lv.key==='reservoir' ? "A cold channel opened up and pulled you under!"
+      : (lv.key==='construction'||lv.key==='roads') ? "The road washed out from under the wheels!"
+      : "Lost footing in a crevasse!");
+    p.x = clamp(p.x, 20, W-60);
+    world.x = Math.max(0, world.x - 140);
+    p.vy = 0; p.y = GROUND_Y - p.h;
+  }
+
+  // horizontal movement: player moves freely on screen; once past the
+  // scroll threshold, the camera/world advances instead of the sprite
+  p.x += p.vx*dt;
+  if (p.x > 330) { world.x += (p.x - 330); p.x = 330; }
+  p.x = clamp(p.x, 20, W-60);
+  world.x = clamp(world.x, 0, world.length + 200);
+
+  // terrain flags under player
+  p.onIce = world.obstacles.some(o => o.type==='ice' && footWorldX>o.x && footWorldX<o.x+o.w);
+  p.onDrift = world.obstacles.some(o => o.type==='drift' && footWorldX>o.x && footWorldX<o.x+o.w) && p.onGround;
+  if (p.onDrift) p.vx *= Math.pow(0.9, dt);
+
+  // logs: simple block unless jumping — or smashed straight through on a sled
+  for (const o of world.obstacles) {
+    if (o.type==='log' && !o._dead) {
+      const ox = o.x - world.x;
+      if (p.x+p.w > ox && p.x < ox+o.w && p.y+p.h > o.y+6 && p.y+p.h < o.y+o.h+24 && p.onGround) {
+        if (p.vehicleActive) {
+          o._dead = true;
+          spawnPuff(ox+o.w/2, o.y+6, 10, "#6b4a2a");
+          popIcon(p.x, p.y-16, 'smash');
+        } else {
+          // block horizontal movement into the log
+          if (p.vx>0 && p.x+p.w>ox && p.x<ox) p.x = ox - p.w;
+          if (p.vx<0 && p.x<ox+o.w) p.x = Math.max(p.x, ox+o.w);
+        }
+      }
+    }
+    if (o.type==='cabin' && !o.used) {
+      const ox = o.x - world.x;
+      if (p.x < ox+o.w && p.x+p.w > ox && p.onGround) {
+        o.used = true;
+        const lv = curLevel();
+        p.warmth = lv.fuelMode ? 100 : clamp(p.warmth + 62, 0, 100);
+        p.flares = Math.min(p.flares+2, 6);
+        if (lv.fuelMode) {
+          p.vehicleStalled = false;
+          if (!p.vehicle) { p.vehicle = 'sled'; p.sledHP = 100; }
+        }
+        popIcon(p.x, p.y-10, lv.fuelMode ? 'fuel' : 'heat');
+        spawnPuff(p.x, p.y+20, 10);
+      }
+    }
+    if (o.type==='sled' && !o.taken) {
+      const ox = o.x - world.x;
+      if (p.x < ox+o.w && p.x+p.w > ox && p.onGround && !p.vehicle) {
+        o.taken = true;
+        p.vehicle = 'sled';
+        p.sledHP = 100;
+        popIcon(p.x, p.y-10, 'vehicle');
+        spawnPuff(p.x, p.y+18, 10, "#c9c9c9");
+      }
+    }
+    if (o.type==='upgrade' && !o.taken) {
+      const ox = o.x - world.x;
+      if (p.x < ox+o.w && p.x+p.w > ox) {
+        o.taken = true;
+        if (p.weaponTier < WEAPON_TIERS.length-1) {
+          p.weaponTier++;
+          popIcon(p.x, p.y-14, 'upgrade');
+        } else {
+          p.flares += 2;
+          popIcon(p.x, p.y-14, 'ammo');
+        }
+        spawnPuff(p.x, p.y+10, 12, "#ffcf6b");
+      }
+    }
+    if (o.type==='monument' && !o.passed) {
+      const ox = o.x - world.x;
+      if (p.x+p.w > ox-20 && p.x < ox+o.w+20) {
+        o.passed = true;
+        popIcon(p.x, p.y-16, 'remember');
+      }
+    }
+    if (o.type==='flag') {
+      const ox = o.x - world.x;
+      if (p.x+p.w > ox && !world.ended) {
+        world.ended = true;
+        state = (world.levelIdx < LEVELS.length) ? STATE.INTERSTITIAL : STATE.WIN;
+      }
+    }
+  }
+
+  // resource drain: warmth (cold levels) or gasoline (fuel levels, burns faster the harder you push it)
+  {
+    const lv = curLevel();
+    if (lv.fuelMode) {
+      const speedFrac = clamp(Math.abs(p.vx) / (MAX_RUN*1.9), 0, 1);
+      p.warmth -= dt * (0.017 + speedFrac*0.062);
+      if (p.warmth <= 0) {
+        p.warmth = 0;
+        if (!p.vehicleStalled) {
+          p.vehicleStalled = true;
+          popIcon(p.x, p.y-18, 'fuelout');
+        }
+        // hauling a dead rig grinds on the sack
+        p.mail = clamp(p.mail - dt*0.020, 0, 100);
+      }
+    } else {
+      const moving = Math.abs(p.vx) > 0.3;
+      p.warmth -= dt * (0.020 + world.storm/3800) * (moving?1:1.5);
+      if (p.warmth <= 0) { p.warmth = 0; if (p.invT<=0) hurt(999, isDry(lv) ? "Collapsed from the heat and the dust." : "Froze on the trail."); }
+    }
+  }
+
+  if (p.hurtT>0) p.hurtT -= dt;
+  if (p.invT>0) p.invT -= dt;
+  p.walkT += dt * Math.abs(p.vx)*0.4;
+
+  // ---- enemies ----
+  for (const e of world.enemies) {
+    const ex = e.x - world.x;
+    e.t += dt*0.06;
+    if (e.type==='squirrel') {
+      e.state = (ex > p.x-260 && ex < p.x+260) ? 'chase' : 'idle';
+      if (e.state==='chase') e.x += Math.sign(p.x - ex) * 1.6 * dt*0.5 + Math.sin(e.t*3)*0.6;
+      else e.x += Math.sin(e.t)*0.4;
+    } else if (e.type==='wolf') {
+      e.state = (ex > p.x-320 && ex < p.x+320 && e.hp>0) ? 'chase' : 'idle';
+      if (e.state==='chase') e.x += Math.sign(p.x-ex) * 1.15 * dt*0.5;
+    }
+    if (e.hp>0) {
+      const box = {x:ex, y:e.y, w:e.w, h:e.h};
+      const pbox = {x:p.x, y:p.y + (p.ducking?18:0), w:p.w, h:p.h - (p.ducking?18:0)};
+      if (aabb(box,pbox) && p.invT<=0) {
+        const lv = curLevel();
+        if (p.vehicle==='sled') {
+          e.hp = 0; e.fleeT = 60; e.x = ex;
+          if (e.type==='wolf') {
+            p.sledHP -= 34;
+            p.invT = 30;
+            // the sack takes the hit even when the carrier doesn't
+            p.mail = clamp(p.mail - 9, 0, 100);
+            popIcon(p.x, p.y-16, 'vehicleloss');
+            if (p.mail<=0 && !p._dying) { p._dying = true; setTimeout(()=>{ state = STATE.DEAD; }, 400); }
+            if (p.sledHP<=0) { dismountSled(true); hurt(14); }
+          } else {
+            p.mail = clamp(p.mail - 3, 0, 100);
+            if (p.mail<=0 && !p._dying) { p._dying = true; setTimeout(()=>{ state = STATE.DEAD; }, 400); }
+          }
+        } else {
+          hurt(e.type==='wolf'?18:8, e.type==='wolf'?lv.bigEnemyName:lv.smallEnemyName);
+          e.vx = -Math.sign(p.vx||1)*2;
+        }
+      }
+    }
+  }
+  world.enemies = world.enemies.filter(e => e.hp>0 || e.fleeT===undefined || e.fleeT>0);
+  for (const e of world.enemies) { if (e.fleeT!==undefined) { e.fleeT -= dt; e.x += 3*dt; } }
+
+  // ---- danger zones (avalanche chute / tailings dump zone) ----
+  for (const o of world.obstacles) {
+    if (o.type==='chute') {
+      const ox = o.x - world.x;
+      const inChute = p.x+p.w > ox && p.x < ox+o.w;
+      const lv = curLevel();
+      if (inChute && p.vehicle==='sled' && lv.chuteForcesDismount) {
+        dismountSled(false, "Too steep for the " + lv.vehicleLabel.toLowerCase() + " — on foot from here.");
+      }
+      if (o.armed && inChute) {
+        const triggerByStorm = chance(0.0009*dt*(1+world.storm/40));
+        const triggerByNoise = p._justFlared;
+        if ((triggerByStorm || triggerByNoise) && !world.avalanche) {
+          o.armed = false;
+          world.avalanche = { wx: world.x - 520, speed: 3.1, t:0 };
+          popIcon(p.x, p.y-30, 'danger', '#ff6b52');
+        }
+      }
+    }
+  }
+  p._justFlared = false;
+
+  if (world.avalanche) {
+    const av = world.avalanche;
+    av.t += dt;
+    av.speed = Math.min(5.2, av.speed + 0.002*dt);
+    av.wx += av.speed*dt;
+    world.shakeT = 6;
+    const wallScreenX = av.wx - world.x;
+    if (wallScreenX + 60 > p.x && p.invT<=0) {
+      const lv = curLevel();
+      if (p.vehicle==='sled') dismountSled(true, "The " + lv.vehicleLabel.toLowerCase() + "'s lost in the slide!");
+      p.mail = clamp(p.mail - 12, 0, 100);
+      hurt(42, lv.wallHitMsg);
+      av.wx = world.x - 700; // reset wall back after a hit
+      av.speed = 3.1;
+    }
+    if (av.wx > world.x + 900) world.avalanche = null; // outrun it
+  }
+  if (world.shakeT>0) world.shakeT -= dt;
+
+  // ---- signal weapon (upgrades via trailside caches) ----
+  if (keys['KeyF'] && p._flareCd===undefined) p._flareCd = 0;
+  if (p._flareCd>0) p._flareCd -= dt;
+  if (keys['KeyF'] && (p._flareCd===undefined || p._flareCd<=0) && p.flares>0) {
+    const tier = WEAPON_TIERS[p.weaponTier];
+    p.flares--; p._flareCd = tier.cooldown; p._justFlared = true;
+    spawnPuff(p.x+p.facing*20, p.y+8, 8, tier.color);
+    for (const e of world.enemies) {
+      const ex = e.x - world.x;
+      if (Math.abs(ex-p.x) < tier.radius) { e.x = ex; e.hp = 0; e.fleeT = 90; }
+    }
+    // Blasting Charge can defuse an armed chute instead of setting one off
+    let defused = false;
+    if (tier.canClearChute) {
+      for (const o of world.obstacles) {
+        if (o.type==='chute' && o.armed) {
+          const ox = o.x - world.x;
+          if (p.x+p.w > ox-50 && p.x < ox+o.w+50) { o.armed = false; defused = true; }
+        }
+      }
+    }
+    if (defused) p._justFlared = false;
+    popIcon(p.x, p.y-20, defused ? 'defused' : 'scare', tier.color);
+  }
+
+  // cull old obstacles/enemies behind camera
+  world.obstacles = world.obstacles.filter(o => !o._dead && (o.x + (o.w||0) > world.x - 600 || o.type==='flag'));
+  world.enemies = world.enemies.filter(e => e.x > world.x - 600);
+
+  // particles
+  for (const pt of particles) { pt.x += pt.vx*dt; pt.y += pt.vy*dt; pt.vy += 0.02*dt; pt.life -= dt; }
+  particles = particles.filter(pt => pt.life>0);
+  for (const f of floaters) f.life -= dt;
+  floaters = floaters.filter(f => f.life>0);
+
+  // Fail states: exposure/cold (non-fuel levels), or losing the mail itself (all levels)
+  if ((p.warmth<=0 && !curLevel().fuelMode) || p.mail<=0 || p._dying) {
+    if (!p._dying) { p._dying=true; setTimeout(()=>{ state = STATE.DEAD; }, 500); }
+  }
+}
+
+function hurt(amount, msg){
+  const p = player;
+  if (p.invT>0) return;
+  p.mail = clamp(p.mail - amount*0.55, 0, 100);
+  p.warmth = clamp(p.warmth - amount*0.40, 0, 100);
+  p.invT = 68;
+  p.hurtT = 20;
+  popIcon(p.x, p.y-14, 'hurt');
+  if (p.mail<=0 && !p._dying) {
+    p._dying = true; setTimeout(()=>{ state = STATE.DEAD; }, 400);
+  }
+  if (p.warmth<=0) {
+    if (curLevel().fuelMode) {
+      if (!p.vehicleStalled) { p.vehicleStalled = true; popIcon(p.x, p.y-30, 'fuelout'); }
+    } else if (!p._dying) {
+      p._dying = true; setTimeout(()=>{ state = STATE.DEAD; }, 400);
+    }
+  }
+}
+
+function dismountSled(wipeout, msg){
+  const p = player;
+  if (p.vehicle !== 'sled') return;
+  p.vehicle = null;
+  p.sledHP = 0;
+  spawnPuff(p.x, p.y+16, 12, "#c9c9c9");
+  popIcon(p.x, p.y-14, wipeout ? 'vehicleloss' : 'repair');
+  if (wipeout) p.vx *= 0.3;
+}
+
+function spawnPuff(x,y,n, color){
+  for (let i=0;i<n;i++){
+    particles.push({ x, y, vx: rand(-1,1), vy: rand(-1.6,-0.2), life: rand(20,40), r: rand(2,5), color: color||"#ffffff" });
+  }
+}
+
+// ---------- ICON FEEDBACK ----------
+// Replaces on-screen text. Each event pops a drawn symbol above the carrier
+// that rises, bobs, and fades over ~2 seconds — long enough to actually read,
+// and legible without knowing what any words say.
+// kinds: 'fuel','fuelout','repair','heat','ammo','upgrade','vehicle','vehicleloss',
+//        'hurt','danger','defused','smash','scare'
+function popIcon(x, y, kind, tint){
+  floaters.push({ x, y, kind, tint, life:120, maxLife:120, seed:rand(0,6.28) });
+  playIconSfx(kind);
+}
+// legacy shim: any remaining floatText call routes to a generic icon
+function floatText(x,y,text,color){ popIcon(x, y, 'danger', color); }
+
+function drawIcons(){
+  for (const f of floaters) {
+    const t = 1 - f.life/f.maxLife;          // 0 -> 1 over lifetime
+    const pop = t < 0.18 ? (t/0.18) : 1;      // quick scale-in
+    const scale = (0.5 + 0.5*pop) * (1 + Math.sin(t*Math.PI*3 + f.seed)*0.05);
+    const rise = -t*34;
+    const alpha = t > 0.75 ? (1-t)/0.25 : 1;
+    const bob = Math.sin(t*Math.PI*4 + f.seed)*3;
+
+    ctx.save();
+    ctx.globalAlpha = clamp(alpha,0,1);
+    ctx.translate(f.x + 13, f.y + rise + bob);
+    ctx.scale(scale, scale);
+    drawIconGlyph(f.kind, f.tint);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function iconBubble(bg, ring){
+  // soft dark disc so icons read against snow AND against dark rock
+  ctx.beginPath(); ctx.arc(0,0,17,0,Math.PI*2);
+  ctx.fillStyle = "rgba(28,22,14,0.72)"; ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = ring || bg; ctx.stroke();
+}
+
+function drawIconGlyph(kind, tint){
+  switch(kind){
+    case 'fuel': {           // jerry can, filling
+      iconBubble("#e8b23c");
+      ctx.fillStyle = "#e8b23c";
+      ctx.fillRect(-7,-8,13,16);
+      ctx.fillStyle = "#2b1d10"; ctx.fillRect(-5,-6,9,7);
+      ctx.fillStyle = "#e8b23c"; ctx.fillRect(6,-6,4,4);
+      break;
+    }
+    case 'fuelout': {        // jerry can, empty + slash
+      iconBubble("#ff8b6b");
+      ctx.fillStyle = "#8a7a63";
+      ctx.fillRect(-7,-8,13,16);
+      ctx.strokeStyle = "#ff5b4b"; ctx.lineWidth=3.5;
+      ctx.beginPath(); ctx.moveTo(-12,-12); ctx.lineTo(12,12); ctx.stroke();
+      break;
+    }
+    case 'repair': {         // wrench
+      iconBubble("#9fd3e8");
+      ctx.strokeStyle = "#dceef6"; ctx.lineWidth=4; ctx.lineCap="round";
+      ctx.beginPath(); ctx.moveTo(-7,7); ctx.lineTo(5,-5); ctx.stroke();
+      ctx.beginPath(); ctx.arc(7,-7,5,0.6,5.0); ctx.stroke();
+      break;
+    }
+    case 'heat': {           // hearth flame (warmth restored)
+      iconBubble("#ffb14d");
+      ctx.fillStyle = "#ffb14d";
+      ctx.beginPath();
+      ctx.moveTo(0,-11); ctx.quadraticCurveTo(8,-1,4,6);
+      ctx.quadraticCurveTo(0,11,-4,6); ctx.quadraticCurveTo(-8,-1,0,-11);
+      ctx.fill();
+      ctx.fillStyle = "#fff0c2";
+      ctx.beginPath(); ctx.moveTo(0,-3); ctx.quadraticCurveTo(3,2,0,6);
+      ctx.quadraticCurveTo(-3,2,0,-3); ctx.fill();
+      break;
+    }
+    case 'ammo': {           // stacked shells
+      iconBubble("#ffcf6b");
+      ctx.fillStyle = "#ffcf6b";
+      ctx.fillRect(-9,-2,5,11); ctx.fillRect(-2,-2,5,11); ctx.fillRect(5,-2,5,11);
+      ctx.fillStyle = "#b23b2e";
+      ctx.fillRect(-9,-7,5,5); ctx.fillRect(-2,-7,5,5); ctx.fillRect(5,-7,5,5);
+      break;
+    }
+    case 'upgrade': {        // up-chevrons (weapon tier up)
+      iconBubble("#ffcf6b");
+      ctx.strokeStyle="#ffcf6b"; ctx.lineWidth=3.5; ctx.lineCap="round"; ctx.lineJoin="round";
+      ctx.beginPath(); ctx.moveTo(-8,1); ctx.lineTo(0,-8); ctx.lineTo(8,1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-8,9); ctx.lineTo(0,0); ctx.lineTo(8,9); ctx.stroke();
+      break;
+    }
+    case 'vehicle': {        // wheel + motion ticks (got a ride)
+      iconBubble("#9fe8b4");
+      ctx.strokeStyle="#9fe8b4"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(2,1,7,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(2,-6); ctx.lineTo(2,8); ctx.moveTo(-5,1); ctx.lineTo(9,1); ctx.stroke();
+      ctx.lineWidth=2.5;
+      ctx.beginPath(); ctx.moveTo(-12,-4); ctx.lineTo(-8,-4); ctx.moveTo(-13,2); ctx.lineTo(-8,2); ctx.stroke();
+      break;
+    }
+    case 'vehicleloss': {    // broken wheel
+      iconBubble("#ff8b6b");
+      ctx.strokeStyle="#c9a0a0"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(0,0,7,0.5,Math.PI*1.5); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0,0,7,Math.PI*1.75,Math.PI*2.2); ctx.stroke();
+      ctx.strokeStyle="#ff5b4b"; ctx.lineWidth=3.5;
+      ctx.beginPath(); ctx.moveTo(-11,-11); ctx.lineTo(11,11); ctx.stroke();
+      break;
+    }
+    case 'hurt': {           // burst star
+      iconBubble("#ff8b6b");
+      ctx.fillStyle="#ff6b52";
+      ctx.beginPath();
+      for (let i=0;i<10;i++){
+        const a = (i/10)*Math.PI*2, r = (i%2===0)?11:5;
+        i===0 ? ctx.moveTo(Math.cos(a)*r, Math.sin(a)*r) : ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+      }
+      ctx.closePath(); ctx.fill();
+      break;
+    }
+    case 'danger': {         // exclamation triangle
+      iconBubble(tint || "#ffffff");
+      ctx.fillStyle = tint || "#ffe98a";
+      ctx.beginPath(); ctx.moveTo(0,-11); ctx.lineTo(11,8); ctx.lineTo(-11,8); ctx.closePath(); ctx.fill();
+      ctx.fillStyle="#2b1d10";
+      ctx.fillRect(-1.6,-4,3.2,7);
+      ctx.fillRect(-1.6,5,3.2,3);
+      break;
+    }
+    case 'defused': {        // shield check
+      iconBubble("#9fe8b4");
+      ctx.fillStyle="#9fe8b4";
+      ctx.beginPath();
+      ctx.moveTo(0,-11); ctx.lineTo(9,-6); ctx.lineTo(9,3);
+      ctx.quadraticCurveTo(0,11,-9,3); ctx.lineTo(-9,-6); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="#1c3a26"; ctx.lineWidth=3; ctx.lineCap="round"; ctx.lineJoin="round";
+      ctx.beginPath(); ctx.moveTo(-4,-1); ctx.lineTo(-1,3); ctx.lineTo(5,-5); ctx.stroke();
+      break;
+    }
+    case 'smash': {          // impact splinters
+      iconBubble("#e8b23c");
+      ctx.strokeStyle="#e8b23c"; ctx.lineWidth=3; ctx.lineCap="round";
+      for (let i=0;i<6;i++){
+        const a=(i/6)*Math.PI*2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a)*4, Math.sin(a)*4);
+        ctx.lineTo(Math.cos(a)*11, Math.sin(a)*11);
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'scare': {          // sound rings (wildlife scattered)
+      iconBubble(tint || "#ffcf6b");
+      ctx.strokeStyle = tint || "#ffcf6b"; ctx.lineWidth=2.5;
+      ctx.beginPath(); ctx.arc(-3,0,4,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(-3,0,8,-0.9,0.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(-3,0,12,-0.9,0.9); ctx.stroke();
+      break;
+    }
+    case 'remember': {       // a small, steady candle \u2014 quiet, not celebratory
+      iconBubble("#cfc4ac", "#cfc4ac");
+      ctx.fillStyle = "#e8e0cc";
+      ctx.fillRect(-2.5,-2,5,9);
+      ctx.fillStyle = "#ffcf6b";
+      ctx.beginPath();
+      ctx.moveTo(0,-11); ctx.quadraticCurveTo(4,-4,1.5,-1);
+      ctx.quadraticCurveTo(0,2,-1.5,-1); ctx.quadraticCurveTo(-4,-4,0,-11);
+      ctx.fill();
+      break;
+    }
+    default: {
+      iconBubble("#ffffff");
+      ctx.fillStyle="#ffe98a";
+      ctx.beginPath(); ctx.arc(0,0,6,0,Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+// ---------- RENDER ----------
+// Deterministic per-x pseudo-random so scenery is stable as the camera moves
+function hashNoise(n){
+  const s = Math.sin(n*127.1)*43758.5453;
+  return s - Math.floor(s);
+}
+
+function drawBackground(){
+  const lv = curLevel();
+  // sky with a warm horizon bloom
+  const g = ctx.createLinearGradient(0,0,0,GROUND_Y+40);
+  g.addColorStop(0, lv.sky[0]);
+  g.addColorStop(0.55, lv.sky[1]);
+  g.addColorStop(1, lv.sky[2]);
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  // low sun / haze bloom near the horizon
+  const bloom = ctx.createRadialGradient(W*0.72, GROUND_Y-150, 10, W*0.72, GROUND_Y-150, 320);
+  bloom.addColorStop(0, isDry(lv) ? "rgba(255,228,170,0.34)" : "rgba(255,246,222,0.30)");
+  bloom.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = bloom; ctx.fillRect(0,0,W,GROUND_Y);
+
+  // furthest ridge — heavily hazed
+  ctx.fillStyle = lv.ridgeFar;
+  ctx.globalAlpha = 0.55;
+  drawRidge(0.035, 96, 22, 0.9);
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = lv.ridgeFar;
+  drawRidge(0.06, 120, 60, 1.0);
+  // snowcaps on the far ridge (winter/phase-2 only)
+  if (!isDry(lv)) drawRidgeCaps(0.06, 120, 60);
+
+  ctx.fillStyle = lv.ridgeMid;
+  drawRidge(0.11, 170, 90, 1.0);
+
+  // aerial perspective wash — pushes ridges back, unifies palette
+  ctx.fillStyle = isDry(lv) ? "rgba(236,226,196,0.28)" : "rgba(226,240,248,0.32)";
+  ctx.fillRect(0,0,W,GROUND_Y+10);
+
+  // mid treeline
+  const t2 = -(world.x*0.32) % 90;
+  for (let x = t2-90; x < W+90; x += 90) {
+    const seed = Math.floor((x + world.x*0.32)/90);
+    drawPine(x, GROUND_Y-40 + hashNoise(seed)*8, 54 + hashNoise(seed+7)*16, lv.treeMidShade, 0.75);
+  }
+
+  // near treeline
+  const t3 = -(world.x*0.55) % 70;
+  for (let x = t3-70; x < W+70; x += 70) {
+    const seed = Math.floor((x + world.x*0.55)/70);
+    drawPine(x, GROUND_Y-8 + hashNoise(seed+3)*6, 68 + hashNoise(seed+11)*20, lv.treeNear, 1.0);
+  }
+
+  if (lv.key==='dredge') drawDredgeSilhouette();
+}
+
+function drawRidgeCaps(parallax, amp, baseY){
+  const offset = -(world.x*parallax);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(0,H);
+  for (let x=0; x<=W+40; x+=40) {
+    const wx = x - offset;
+    const y = GROUND_Y - baseY - Math.abs(Math.sin(wx*0.004))*amp - Math.sin(wx*0.011)*20;
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(W,H); ctx.closePath(); ctx.clip();
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  for (let x=0; x<=W+40; x+=40) {
+    const wx = x - offset;
+    const y = GROUND_Y - baseY - Math.abs(Math.sin(wx*0.004))*amp - Math.sin(wx*0.011)*20;
+    ctx.fillRect(x, y, 42, 16);
+  }
+  ctx.restore();
+}
+
+function drawDredgeSilhouette(){
+  // the hulk itself: bucket ladder, gantry, stack — parked in the haze,
+  // slowly working. The level's tailings events are its interactive echo.
+  const parallax = 0.18;
+  const wx = 4200 - world.x*parallax;
+  if (wx < -500 || wx > W+500) return;
+  const base = GROUND_Y - 42;
+  const ink = "rgba(58,54,42,0.62)";
+
+  // hull
+  ctx.fillStyle = ink;
+  ctx.fillRect(wx, base-70, 210, 70);
+  // superstructure
+  ctx.fillRect(wx+42, base-116, 74, 46);
+  // stack + slow smoke
+  ctx.fillRect(wx+128, base-134, 15, 64);
+  for (let i=0;i<4;i++){
+    const t = (world.time*0.35 + i*46) % 184;
+    ctx.globalAlpha = 0.30*(1 - t/184);
+    ctx.beginPath();
+    ctx.arc(wx+136 + Math.sin(t*0.05)*16, base-138 - t*0.55, 9 + t*0.07, 0, Math.PI*2);
+    ctx.fillStyle = "#8a8272"; ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // bucket ladder down into the water
+  ctx.strokeStyle = ink; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(wx+8, base-58); ctx.lineTo(wx-72, base+16); ctx.stroke();
+  ctx.lineWidth = 3;
+  for (let i=0;i<7;i++){
+    const f = i/6;
+    ctx.beginPath();
+    ctx.arc(wx+8 - f*80, base-58 + f*74, 4, 0, Math.PI*2);
+    ctx.fillStyle = ink; ctx.fill();
+  }
+  // stacker boom flinging tailings out the back
+  ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.moveTo(wx+210, base-52); ctx.lineTo(wx+316, base+6); ctx.stroke();
+  // spoil heap under the stacker
+  ctx.fillStyle = "rgba(120,110,84,0.5)";
+  ctx.beginPath();
+  ctx.moveTo(wx+270, base+22); ctx.lineTo(wx+322, base-16); ctx.lineTo(wx+372, base+22);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawRidge(parallax, amp, baseY, detail){
+  const offset = -(world.x*parallax);
+  const step = detail < 1 ? 56 : 26;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let x=0; x<=W+step; x+=step) {
+    const wx = x - offset;
+    const y = GROUND_Y - baseY
+            - Math.abs(Math.sin(wx*0.004))*amp
+            - Math.sin(wx*0.011)*20
+            - Math.sin(wx*0.031)*7*detail;
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(W,H); ctx.closePath(); ctx.fill();
+}
+
+function drawPine(x, y, h, color, alpha){
+  ctx.save();
+  ctx.globalAlpha = alpha===undefined ? 1 : alpha;
+  const lv = curLevel();
+  const winterish = !isDry(lv);
+
+  // trunk
+  ctx.fillStyle = "#3a2a1c";
+  ctx.fillRect(x-2, y+h*0.55, 4, h*0.18);
+
+  // three tiers, darker at the base for volume
+  const tiers = [
+    { top:y,          spread:0.32, drop:0.34 },
+    { top:y+h*0.15,   spread:0.25, drop:0.52 },
+    { top:y+h*0.32,   spread:0.19, drop:0.68 },
+  ];
+  for (let i=0;i<tiers.length;i++){
+    const t = tiers[i];
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, t.top);
+    ctx.lineTo(x - h*t.spread, y + h*t.drop);
+    ctx.lineTo(x + h*t.spread, y + h*t.drop);
+    ctx.closePath(); ctx.fill();
+    // lit edge on the sun side
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.moveTo(x, t.top);
+    ctx.lineTo(x + h*t.spread, y + h*t.drop);
+    ctx.lineTo(x + h*t.spread*0.42, y + h*t.drop);
+    ctx.closePath(); ctx.fill();
+  }
+
+  if (winterish) {
+    // snow load on each tier, not just the crown
+    ctx.fillStyle = "rgba(255,255,255,0.82)";
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-7,y+h*0.13); ctx.lineTo(x+7,y+h*0.13); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha *= 0.75;
+    ctx.beginPath(); ctx.moveTo(x,y+h*0.15); ctx.lineTo(x-9,y+h*0.30); ctx.lineTo(x+9,y+h*0.30); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawGround(){
+  const lv = curLevel();
+  if (lv.key==='reservoir') { drawWaterSurface(lv); return; }
+
+  // base slab with a subtle vertical falloff so the foreground reads closer
+  const gg = ctx.createLinearGradient(0, GROUND_Y, 0, H);
+  gg.addColorStop(0, lv.ground);
+  gg.addColorStop(1, lv.groundDot);
+  ctx.fillStyle = gg;
+  ctx.fillRect(0, GROUND_Y, W, H-GROUND_Y);
+
+  // crisp lip along the trail edge
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.fillRect(0, GROUND_Y, W, 3);
+  ctx.fillStyle = "rgba(0,0,0,0.10)";
+  ctx.fillRect(0, GROUND_Y+3, W, 2);
+
+  // rolling surface contour — deterministic, scrolls with the world
+  ctx.fillStyle = lv.groundDot;
+  const off = world.x % 60;
+  for (let i=-1; i<W/60+2; i++){
+    const wx = Math.floor((world.x + i*60)/60);
+    const x = i*60 - off;
+    const r = hashNoise(wx);
+    ctx.globalAlpha = 0.5 + r*0.4;
+    ctx.beginPath();
+    ctx.ellipse(x + r*22, GROUND_Y + 10 + r*8, 22 + r*16, 5 + r*4, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // scattered ground detail: rocks / stubble / tailings grit
+  for (let i=-1; i<W/45+2; i++){
+    const wx = Math.floor((world.x + i*45)/45);
+    const r = hashNoise(wx*1.7);
+    if (r < 0.62) continue;
+    const x = i*45 - (world.x % 45);
+    const y = GROUND_Y + 22 + r*46;
+    if (lv.key==='dredge') {
+      ctx.fillStyle = "rgba(90,82,60,0.5)";
+      ctx.fillRect(x, y, 5+r*5, 3+r*3);
+    } else if (lv.key==='roads') {
+      ctx.fillStyle = "rgba(110,96,60,0.4)";
+      ctx.beginPath(); ctx.ellipse(x, y, 4+r*5, 2+r*2, 0,0,Math.PI*2); ctx.fill();
+    } else {
+      ctx.fillStyle = "rgba(178,196,206,0.45)";
+      ctx.beginPath(); ctx.ellipse(x, y, 6+r*7, 2+r*2, 0,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  // two faint wheel ruts / ski tracks running the length of the trail
+  ctx.strokeStyle = lv.key==='roads' ? "rgba(120,100,64,0.30)" : "rgba(150,170,185,0.28)";
+  ctx.lineWidth = 3;
+  for (const ry of [GROUND_Y+34, GROUND_Y+52]) {
+    ctx.beginPath();
+    for (let x=0; x<=W; x+=20){
+      const wob = Math.sin((x + world.x)*0.012)*2;
+      x===0 ? ctx.moveTo(x, ry+wob) : ctx.lineTo(x, ry+wob);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawWaterSurface(lv){
+  // the deep — dark and near-opaque toward the bottom of the frame
+  const gg = ctx.createLinearGradient(0, GROUND_Y, 0, H);
+  gg.addColorStop(0, lv.ground);
+  gg.addColorStop(0.4, lv.groundDot);
+  gg.addColorStop(1, "#0a1418");
+  ctx.fillStyle = gg;
+  ctx.fillRect(0, GROUND_Y, W, H-GROUND_Y);
+
+  // submerged townsite — rooflines, a chimney, fence posts, dead standing
+  // timber — visible only as darker shapes further down in the water
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  for (let i=-1; i<W/140+2; i++){
+    const wx = Math.floor((world.x + i*140)/140);
+    const r = hashNoise(wx*2.3);
+    const x = i*140 - (world.x % 140);
+    const depth = 55 + r*90;
+    const y = GROUND_Y + depth;
+    ctx.fillStyle = `rgba(18,28,32,${0.30 + (1-depth/150)*0.35})`;
+    if (r < 0.30) {
+      // a roofline, half-collapsed
+      ctx.beginPath();
+      ctx.moveTo(x-16, y+10); ctx.lineTo(x, y-8); ctx.lineTo(x+16, y+10);
+      ctx.lineTo(x+12, y+16); ctx.lineTo(x-12, y+16); ctx.closePath(); ctx.fill();
+    } else if (r < 0.5) {
+      // a lone chimney, still standing
+      ctx.fillRect(x-4, y-18, 8, 26);
+    } else if (r < 0.72) {
+      // fence posts, leaning
+      for (let k=0;k<3;k++) ctx.fillRect(x+k*9-2, y-4+Math.sin(wx+k)*3, 3, 16);
+    } else if (r < 0.9) {
+      // dead standing timber, a submerged snag
+      ctx.fillRect(x-2, y-30, 4, 40);
+      ctx.fillRect(x-8, y-24, 4, 14);
+      ctx.fillRect(x+4, y-20, 4, 12);
+    }
+  }
+  ctx.restore();
+
+  // the water line itself: a bright, restless seam
+  ctx.fillStyle = "rgba(232,240,240,0.6)";
+  ctx.fillRect(0, GROUND_Y, W, 2.5);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth=1.4;
+  ctx.beginPath();
+  for (let x=0; x<=W; x+=18){
+    const wob = Math.sin((x+world.x)*0.05)*1.6 + Math.sin((x+world.x)*0.013)*2.4;
+    x===0 ? ctx.moveTo(x, GROUND_Y+wob) : ctx.lineTo(x, GROUND_Y+wob);
+  }
+  ctx.stroke();
+
+  // ripple rings, slow and sparse — the surface is mostly, unsettlingly still
+  for (let i=0;i<5;i++){
+    const wx = Math.floor((world.x + i*260)/260);
+    const r = hashNoise(wx*3.1);
+    const x = (i*260 - (world.x % 260)) + r*80;
+    const t = (world.time*0.4 + i*37) % 200;
+    ctx.globalAlpha = Math.max(0, 0.22*(1 - t/200));
+    ctx.strokeStyle = "#e8f0f0"; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.ellipse(x, GROUND_Y+6, 6+t*0.4, 2+t*0.1, 0, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // near-surface ripple texture, denser and closer to the player
+  ctx.strokeStyle = "rgba(220,232,232,0.22)"; ctx.lineWidth=1.5;
+  for (const ry of [GROUND_Y+22, GROUND_Y+40, GROUND_Y+60]) {
+    ctx.beginPath();
+    for (let x=0; x<=W; x+=24){
+      const wob = Math.sin((x+world.x*0.8)*0.03 + ry)*2.5;
+      x===0 ? ctx.moveTo(x, ry+wob) : ctx.lineTo(x, ry+wob);
+    }
+    ctx.stroke();
+  }
+}
+
+
+function drawObstacles(){
+  const lv = curLevel();
+  for (const o of world.obstacles) {
+    const x = o.x - world.x;
+    if (x < -240 || x > W+240) continue;
+
+    if (o.type==='ice') {
+      // slick patch — glossy, with highlight streaks
+      const g = ctx.createLinearGradient(x, GROUND_Y, x, GROUND_Y+14);
+      g.addColorStop(0, lv.iceColor);
+      g.addColorStop(1, "rgba(255,255,255,0.12)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x+o.w/2, GROUND_Y+7, o.w/2, 8, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth=1.6;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth=2;
+      for (let i=0;i<3;i++){
+        const sx = x + 12 + i*(o.w/3.4);
+        ctx.beginPath(); ctx.moveTo(sx, GROUND_Y+5); ctx.lineTo(sx+14, GROUND_Y+3); ctx.stroke();
+      }
+    }
+
+    else if (o.type==='drift') {
+      // snow/tailings mound with a windward lip
+      ctx.fillStyle = lv.driftColor;
+      ctx.beginPath();
+      ctx.moveTo(x, GROUND_Y+8);
+      ctx.quadraticCurveTo(x+o.w*0.28, GROUND_Y-28, x+o.w*0.58, GROUND_Y-20);
+      ctx.quadraticCurveTo(x+o.w*0.85, GROUND_Y-13, x+o.w, GROUND_Y+8);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = lv.driftShade;
+      ctx.beginPath();
+      ctx.moveTo(x+o.w*0.42, GROUND_Y+8);
+      ctx.quadraticCurveTo(x+o.w*0.7, GROUND_Y-14, x+o.w, GROUND_Y+8);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth=1.6;
+      ctx.beginPath();
+      ctx.moveTo(x, GROUND_Y+8);
+      ctx.quadraticCurveTo(x+o.w*0.28, GROUND_Y-28, x+o.w*0.58, GROUND_Y-20);
+      ctx.stroke();
+    }
+
+    else if (o.type==='gap') {
+      // hole in the trail — dark, with crumbling lips and depth banding
+      const g = ctx.createLinearGradient(0, GROUND_Y, 0, H);
+      g.addColorStop(0, lv.gapLight);
+      g.addColorStop(0.35, lv.gapColor);
+      g.addColorStop(1, "#11151c");
+      ctx.fillStyle = g;
+      ctx.fillRect(x, GROUND_Y, o.w, H-GROUND_Y);
+      // jagged edges
+      ctx.fillStyle = lv.ground;
+      ctx.beginPath();
+      ctx.moveTo(x-6, GROUND_Y);
+      ctx.lineTo(x+7, GROUND_Y);
+      ctx.lineTo(x+3, GROUND_Y+9);
+      ctx.lineTo(x-6, GROUND_Y+6);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x+o.w+6, GROUND_Y);
+      ctx.lineTo(x+o.w-7, GROUND_Y);
+      ctx.lineTo(x+o.w-3, GROUND_Y+9);
+      ctx.lineTo(x+o.w+6, GROUND_Y+6);
+      ctx.closePath(); ctx.fill();
+      if (lv.key==='dredge') {
+        // stagnant pond water + belly-up perch
+        ctx.fillStyle = "rgba(96,110,80,0.65)";
+        ctx.fillRect(x, GROUND_Y+26, o.w, 26);
+        ctx.strokeStyle = "rgba(180,195,160,0.35)"; ctx.lineWidth=1.4;
+        for (let i=0;i<2;i++){
+          ctx.beginPath();
+          ctx.moveTo(x+4, GROUND_Y+32+i*9);
+          ctx.lineTo(x+o.w-4, GROUND_Y+32+i*9);
+          ctx.stroke();
+        }
+        ctx.fillStyle = "#cbbf92";
+        for (let i=0;i<Math.max(1,Math.floor(o.w/70));i++){
+          const fx = x+20+i*62, fy = GROUND_Y+30+Math.sin(world.time*0.04+i)*2;
+          ctx.beginPath(); ctx.ellipse(fx, fy, 8, 3.2, 0,0,Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.moveTo(fx-8,fy); ctx.lineTo(fx-13,fy-3.5); ctx.lineTo(fx-13,fy+3.5); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle="#5a5030"; ctx.lineWidth=1.2;
+          ctx.beginPath(); ctx.moveTo(fx+2,fy-1.6); ctx.lineTo(fx+4,fy+1.6);
+          ctx.moveTo(fx+4,fy-1.6); ctx.lineTo(fx+2,fy+1.6); ctx.stroke();
+        }
+      }
+    }
+
+    else if (o.type==='log') {
+      // fallen trunk, end-on grain
+      ctx.fillStyle = lv.logColor;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x, o.y, o.w, o.h, 5) : ctx.rect(x, o.y, o.w, o.h);
+      ctx.fill();
+      ctx.fillStyle = lv.logLight;
+      ctx.fillRect(x+2, o.y+2, o.w-4, 5);
+      ctx.strokeStyle="#2b1d10"; ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x, o.y, o.w, o.h, 5) : ctx.rect(x, o.y, o.w, o.h);
+      ctx.stroke();
+      // growth rings on the cut end
+      ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth=1.2;
+      for (let r=3; r<10; r+=3){
+        ctx.beginPath(); ctx.ellipse(x+5, o.y+o.h/2, 3, r, 0, 0, Math.PI*2); ctx.stroke();
+      }
+      // broken branch stub
+      ctx.strokeStyle = lv.logColor; ctx.lineWidth=4;
+      ctx.beginPath(); ctx.moveTo(x+o.w*0.6, o.y+4); ctx.lineTo(x+o.w*0.78, o.y-8); ctx.stroke();
+      if (!isDry(lv)) {
+        ctx.fillStyle="rgba(255,255,255,0.75)";
+        ctx.fillRect(x+1, o.y-2, o.w-2, 4);
+      }
+    }
+
+    else if (o.type==='cabin') {
+      const lit = !o.used;
+      // shadow
+      ctx.fillStyle="rgba(28,36,48,0.18)";
+      ctx.beginPath(); ctx.ellipse(x+o.w/2, GROUND_Y+6, o.w*0.62, 7, 0,0,Math.PI*2); ctx.fill();
+      // log walls
+      ctx.fillStyle = lit ? lv.cabinColor : "#8a7a63";
+      ctx.fillRect(x, o.y+30, o.w, o.h-30);
+      ctx.strokeStyle="rgba(0,0,0,0.25)"; ctx.lineWidth=1.2;
+      for (let ly=o.y+38; ly<o.y+o.h; ly+=9){
+        ctx.beginPath(); ctx.moveTo(x, ly); ctx.lineTo(x+o.w, ly); ctx.stroke();
+      }
+      // roof
+      ctx.fillStyle = lv.cabinRoof;
+      ctx.beginPath(); ctx.moveTo(x-10,o.y+32); ctx.lineTo(x+o.w/2,o.y-6); ctx.lineTo(x+o.w+10,o.y+32);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="#241a10"; ctx.lineWidth=2; ctx.stroke();
+      if (!isDry(lv)) {
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath(); ctx.moveTo(x-10,o.y+32); ctx.lineTo(x+o.w/2,o.y-6); ctx.lineTo(x+o.w+10,o.y+32);
+        ctx.lineTo(x+o.w+10,o.y+26); ctx.lineTo(x+o.w/2,o.y-11); ctx.lineTo(x-10,o.y+26);
+        ctx.closePath(); ctx.fill();
+      }
+      // door
+      ctx.fillStyle = lit ? "#3a2712" : "#6a5c48";
+      ctx.fillRect(x+o.w/2-9, o.y+62, 18, 48);
+      ctx.fillStyle="#e8d24a";
+      ctx.beginPath(); ctx.arc(x+o.w/2+5, o.y+86, 1.7, 0, Math.PI*2); ctx.fill();
+      // lit window + chimney smoke while the stop is still available
+      if (lit) {
+        const flicker = 0.72 + Math.sin(world.time*0.22)*0.12;
+        ctx.globalAlpha = flicker;
+        ctx.fillStyle = "#ffcf6b";
+        ctx.fillRect(x+9, o.y+52, 15, 14);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle="#3a2712"; ctx.lineWidth=1.6;
+        ctx.strokeRect(x+9, o.y+52, 15, 14);
+        ctx.beginPath(); ctx.moveTo(x+16.5,o.y+52); ctx.lineTo(x+16.5,o.y+66);
+        ctx.moveTo(x+9,o.y+59); ctx.lineTo(x+24,o.y+59); ctx.stroke();
+        // chimney
+        ctx.fillStyle="#6a5442";
+        ctx.fillRect(x+o.w-18, o.y+2, 11, 22);
+        for (let i=0;i<4;i++){
+          const t=(world.time*0.5 + i*30)%120;
+          ctx.globalAlpha = 0.34*(1-t/120);
+          ctx.fillStyle="#e8e4dc";
+          ctx.beginPath();
+          ctx.arc(x+o.w-12+Math.sin(t*0.06)*8, o.y-2-t*0.42, 5+t*0.05, 0, Math.PI*2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        // hanging mail-stop lantern (reads as "stop here" without words)
+        ctx.strokeStyle="#3a2712"; ctx.lineWidth=1.6;
+        ctx.beginPath(); ctx.moveTo(x+o.w+4, o.y+34); ctx.lineTo(x+o.w+4, o.y+42); ctx.stroke();
+        ctx.fillStyle="#ffcf6b"; ctx.globalAlpha = flicker;
+        ctx.beginPath(); ctx.ellipse(x+o.w+4, o.y+47, 5, 6, 0,0,Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle="#3a2712"; ctx.lineWidth=1.4;
+        ctx.beginPath(); ctx.ellipse(x+o.w+4, o.y+47, 5, 6, 0,0,Math.PI*2); ctx.stroke();
+      }
+    }
+
+    else if (o.type==='chute') {
+      // danger corridor: hazard-striped posts + hatched ground band.
+      // Colour and iconography carry the meaning, not the words.
+      const armed = o.armed;
+      const col = armed ? "#c9302c" : "#5f7a52";
+      // ground hazard band
+      ctx.save();
+      ctx.globalAlpha = armed ? 0.20 : 0.10;
+      ctx.fillStyle = col;
+      ctx.fillRect(x, GROUND_Y-4, o.w, 10);
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = armed ? 0.30 : 0.14;
+      ctx.strokeStyle = col; ctx.lineWidth = 5;
+      for (let sx = x-16; sx < x+o.w; sx += 22){
+        ctx.beginPath(); ctx.moveTo(sx, GROUND_Y+6); ctx.lineTo(sx+14, GROUND_Y-8); ctx.stroke();
+      }
+      ctx.restore();
+      // marker posts at both ends
+      for (const px of [x, x+o.w]) {
+        ctx.fillStyle = "#f2ead8";
+        ctx.fillRect(px-3, o.y, 6, GROUND_Y-o.y);
+        ctx.fillStyle = col;
+        for (let by=o.y; by<GROUND_Y; by+=16) ctx.fillRect(px-3, by, 6, 8);
+        ctx.strokeStyle="#2b1d10"; ctx.lineWidth=1.2;
+        ctx.strokeRect(px-3, o.y, 6, GROUND_Y-o.y);
+        // pennant
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(px+3, o.y+2);
+        ctx.lineTo(px+22, o.y+9);
+        ctx.lineTo(px+3, o.y+16);
+        ctx.closePath(); ctx.fill();
+      }
+      // hazard sign floating over the corridor: pulsing triangle if armed,
+      // steady shield if the player has already defused it
+      const cx = x+o.w/2, sy = o.y - 16 + Math.sin(world.time*0.09)*3;
+      ctx.save();
+      ctx.translate(cx, sy);
+      const pulse = armed ? 1 + Math.sin(world.time*0.16)*0.07 : 1;
+      ctx.scale(pulse, pulse);
+      if (armed) {
+        ctx.fillStyle = "#c9302c";
+        ctx.beginPath(); ctx.moveTo(0,-13); ctx.lineTo(13,9); ctx.lineTo(-13,9); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle="#2b1d10"; ctx.lineWidth=2; ctx.stroke();
+        ctx.fillStyle="#f2ead8";
+        ctx.fillRect(-1.8,-6,3.6,8); ctx.fillRect(-1.8,4,3.6,3.4);
+      } else {
+        ctx.fillStyle = "#5f7a52";
+        ctx.beginPath();
+        ctx.moveTo(0,-13); ctx.lineTo(11,-7); ctx.lineTo(11,3);
+        ctx.quadraticCurveTo(0,13,-11,3); ctx.lineTo(-11,-7); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle="#2b1d10"; ctx.lineWidth=2; ctx.stroke();
+        ctx.strokeStyle="#f2ead8"; ctx.lineWidth=2.6; ctx.lineCap="round"; ctx.lineJoin="round";
+        ctx.beginPath(); ctx.moveTo(-5,-1); ctx.lineTo(-1.5,3); ctx.lineTo(6,-6); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    else if (o.type==='sled' && !o.taken) {
+      // parked vehicle pickup, with a bobbing "board me" chevron
+      ctx.fillStyle="rgba(28,36,48,0.18)";
+      ctx.beginPath(); ctx.ellipse(x+o.w/2, o.y+o.h+6, o.w*0.6, 5, 0,0,Math.PI*2); ctx.fill();
+      ctx.save();
+      ctx.translate(x+o.w/2, o.y+o.h);
+      drawMount(lv);
+      ctx.restore();
+      const by = -14 + Math.sin(world.time*0.12)*4;
+      ctx.fillStyle="#9fe8b4";
+      ctx.beginPath();
+      ctx.moveTo(x+o.w/2, o.y+by-12);
+      ctx.lineTo(x+o.w/2+9, o.y+by-2);
+      ctx.lineTo(x+o.w/2+4, o.y+by-2);
+      ctx.lineTo(x+o.w/2+4, o.y+by+7);
+      ctx.lineTo(x+o.w/2-4, o.y+by+7);
+      ctx.lineTo(x+o.w/2-4, o.y+by-2);
+      ctx.lineTo(x+o.w/2-9, o.y+by-2);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="#2b1d10"; ctx.lineWidth=1.6; ctx.stroke();
+    }
+
+    else if (o.type==='upgrade' && !o.taken) {
+      // supply crate with a glow and rising chevrons
+      const bob = Math.sin(world.time*0.09)*4;
+      const cy = o.y+bob;
+      const glow = ctx.createRadialGradient(x+o.w/2, cy+o.h/2, 2, x+o.w/2, cy+o.h/2, 34);
+      glow.addColorStop(0,"rgba(255,207,107,0.42)");
+      glow.addColorStop(1,"rgba(255,207,107,0)");
+      ctx.fillStyle=glow;
+      ctx.fillRect(x-24, cy-24, o.w+48, o.h+48);
+      ctx.fillStyle = "#c98a2b";
+      ctx.fillRect(x, cy, o.w, o.h);
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(x, cy, o.w, 5);
+      ctx.strokeStyle = "#4a3018"; ctx.lineWidth=2;
+      ctx.strokeRect(x, cy, o.w, o.h);
+      ctx.beginPath();
+      ctx.moveTo(x, cy+o.h/2); ctx.lineTo(x+o.w, cy+o.h/2);
+      ctx.moveTo(x+o.w/2, cy); ctx.lineTo(x+o.w/2, cy+o.h);
+      ctx.stroke();
+      // rising chevrons = "this makes your weapon better"
+      ctx.strokeStyle="#ffcf6b"; ctx.lineWidth=2.6; ctx.lineCap="round"; ctx.lineJoin="round";
+      for (let i=0;i<2;i++){
+        const cy2 = cy - 10 - i*7 + Math.sin(world.time*0.12 - i)*2;
+        ctx.globalAlpha = 0.9 - i*0.35;
+        ctx.beginPath();
+        ctx.moveTo(x+o.w/2-7, cy2+5); ctx.lineTo(x+o.w/2, cy2-2); ctx.lineTo(x+o.w/2+7, cy2+5);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    else if (o.type==='flag') {
+      // destination: post-office cairn with a flag and mail horn
+      ctx.fillStyle="rgba(28,36,48,0.2)";
+      ctx.beginPath(); ctx.ellipse(x+6, GROUND_Y+5, 26, 6, 0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#6b4a2a";
+      ctx.fillRect(x, o.y, 7, o.h);
+      ctx.strokeStyle="#3a2712"; ctx.lineWidth=1.4; ctx.strokeRect(x, o.y, 7, o.h);
+      // waving flag
+      ctx.fillStyle = "#b23b2e";
+      ctx.beginPath();
+      ctx.moveTo(x+7, o.y+4);
+      for (let i=0;i<=6;i++){
+        const t=i/6;
+        ctx.lineTo(x+7+t*56, o.y+8 + Math.sin(world.time*0.14 + t*4)*4*t);
+      }
+      for (let i=6;i>=0;i--){
+        const t=i/6;
+        ctx.lineTo(x+7+t*56, o.y+26 + Math.sin(world.time*0.14 + t*4)*4*t);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="#7a2119"; ctx.lineWidth=1.2; ctx.stroke();
+      // post horn emblem on the flag
+      ctx.strokeStyle="#f2ead8"; ctx.lineWidth=2.2;
+      ctx.beginPath(); ctx.arc(x+30, o.y+16, 5.5, 0.5, 5.4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x+34, o.y+12); ctx.lineTo(x+40, o.y+9); ctx.stroke();
+      // cairn base
+      ctx.fillStyle="#8a8272";
+      ctx.beginPath(); ctx.ellipse(x+3, GROUND_Y-4, 17, 9, 0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="#6f695c";
+      ctx.beginPath(); ctx.ellipse(x+3, GROUND_Y-12, 11, 6, 0,0,Math.PI*2); ctx.fill();
+    }
+
+    else if (o.type==='monument') {
+      // A quiet memorial on a small rise still above the waterline —
+      // no inscription rendered; the weight is carried by the level's
+      // atmosphere and the finishNote, not by text the player must
+      // parse mid-crossing.
+      const bx = x+o.w/2;
+      // the rise itself, a little island of dry ground in all this water
+      ctx.fillStyle="#5a6456";
+      ctx.beginPath(); ctx.ellipse(bx, GROUND_Y+2, 46, 12, 0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="#6e7a60";
+      ctx.beginPath(); ctx.ellipse(bx, GROUND_Y-3, 40, 9, 0,0,Math.PI*2); ctx.fill();
+      // reflection in the still water at its edge
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.translate(bx, GROUND_Y+18);
+      ctx.scale(1,-1);
+      ctx.fillStyle="#e8e4dc";
+      ctx.fillRect(-4, -o.h+6, 8, o.h-6);
+      ctx.beginPath(); ctx.moveTo(-8, -o.h+6); ctx.lineTo(0,-o.h-6); ctx.lineTo(8,-o.h+6); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      // the marker: a simple stone shaft with a rounded shoulder
+      ctx.fillStyle="#dcd8ce";
+      ctx.fillRect(bx-4, o.y+6, 8, o.h-6);
+      ctx.beginPath(); ctx.moveTo(bx-4, o.y+6); ctx.lineTo(bx, o.y-6); ctx.lineTo(bx+4, o.y+6); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="rgba(60,60,52,0.4)"; ctx.lineWidth=1.2;
+      ctx.strokeRect(bx-4, o.y+6, 8, o.h-6);
+      // a carved circle \u2014 sun, or just remembrance, left open to read either way
+      ctx.strokeStyle="rgba(60,60,52,0.5)"; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.arc(bx, o.y+16, 6, 0, Math.PI*2); ctx.stroke();
+      // a small offering of stones at the base \u2014 the kind left by people
+      // who came before, and by people who came after
+      ctx.fillStyle="#8a8272";
+      [[-9,3],[-3,5],[4,4],[10,2]].forEach(([dx,r])=>{
+        ctx.beginPath(); ctx.arc(bx+dx, GROUND_Y-2, r, 0, Math.PI*2); ctx.fill();
+      });
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawEnemies(){
+  const lv = curLevel();
+  for (const e of world.enemies) {
+    const x = e.x - world.x;
+    if (x<-100||x>W+100) continue;
+    const bob = Math.sin(e.t*8)*2;
+    const alarmed = e.state==='chase';
+
+    // contact shadow
+    ctx.save();
+    ctx.globalAlpha = 0.18; ctx.fillStyle="#1c2430";
+    ctx.beginPath(); ctx.ellipse(x+10, GROUND_Y+3, e.type==='wolf'?15:8, 3.5, 0,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    if (e.type==='squirrel') {
+      if (lv.key==='dredge') {
+        // horsefly: dark body, blurred wings, erratic jitter
+        const jx = Math.sin(e.t*11)*2, jy = Math.cos(e.t*13)*2;
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle="#dfe4d4";
+        ctx.beginPath(); ctx.ellipse(x+9+jx, e.y-6+bob+jy, 8, 3.4, 0.5,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(x+9+jx, e.y-1+bob+jy, 8, 3.4,-0.5,0,Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = lv.smallColor;
+        ctx.beginPath(); ctx.ellipse(x+8+jx, e.y+bob+jy, 8, 5.5, 0,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x+1+jx, e.y-3+bob+jy, 4, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle="#c14a3a";
+        ctx.beginPath(); ctx.arc(x-0.5+jx, e.y-4+bob+jy, 1.8, 0, Math.PI*2); ctx.fill();
+      } else {
+        // squirrel: body, haunch, bushy tail
+        ctx.fillStyle = lv.smallColor;
+        ctx.beginPath(); ctx.ellipse(x+8, e.y+bob, 8.5, 6, 0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = "rgba(0,0,0,0.18)";
+        ctx.beginPath(); ctx.ellipse(x+10, e.y+2+bob, 5, 3.5, 0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = lv.smallColor;
+        ctx.beginPath(); ctx.ellipse(x+1.5, e.y-4+bob, 4.4, 4, 0,0,Math.PI*2); ctx.fill();
+        // ear
+        ctx.beginPath(); ctx.moveTo(x, e.y-7+bob); ctx.lineTo(x+2, e.y-11+bob); ctx.lineTo(x+4, e.y-7+bob);
+        ctx.closePath(); ctx.fill();
+        // tail
+        ctx.strokeStyle = lv.smallColor; ctx.lineWidth=5.5; ctx.lineCap="round";
+        const tf = Math.sin(e.t*9)*4;
+        ctx.beginPath();
+        ctx.moveTo(x+14, e.y+2+bob);
+        ctx.quadraticCurveTo(x+26+tf, e.y-8+bob, x+17, e.y-19+bob);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(255,255,255,0.22)"; ctx.lineWidth=2;
+        ctx.beginPath();
+        ctx.moveTo(x+15, e.y+bob);
+        ctx.quadraticCurveTo(x+25+tf, e.y-8+bob, x+17, e.y-17+bob);
+        ctx.stroke();
+        // eye
+        ctx.fillStyle= alarmed ? "#c14a3a" : "#2b1d10";
+        ctx.beginPath(); ctx.arc(x-0.2, e.y-5+bob, 1.5, 0, Math.PI*2); ctx.fill();
+      }
+    } else if (e.type==='wolf') {
+      const gait = Math.sin(e.t*7)*3;
+      if (lv.key==='dredge') {
+        // elk: tall, long-legged, antlered
+        ctx.strokeStyle = lv.bigColor; ctx.lineWidth=3.4; ctx.lineCap="round";
+        ctx.beginPath();
+        ctx.moveTo(x+8, e.y+14); ctx.lineTo(x+6+gait, e.y+26);
+        ctx.moveTo(x+26, e.y+14); ctx.lineTo(x+28-gait, e.y+26);
+        ctx.stroke();
+        ctx.fillStyle = lv.bigColor;
+        ctx.beginPath(); ctx.ellipse(x+17, e.y+10+bob*0.4, 17, 9, 0,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.14)";
+        ctx.beginPath(); ctx.ellipse(x+17, e.y+6+bob*0.4, 14, 4, 0,0,Math.PI*2); ctx.fill();
+        // neck + head
+        ctx.strokeStyle = lv.bigColor; ctx.lineWidth=7;
+        ctx.beginPath(); ctx.moveTo(x+5, e.y+8); ctx.lineTo(x-1, e.y-3); ctx.stroke();
+        ctx.fillStyle = lv.bigColor;
+        ctx.beginPath(); ctx.ellipse(x-3, e.y-5+bob*0.4, 6.5, 4.5, -0.3,0,Math.PI*2); ctx.fill();
+        // antlers
+        ctx.strokeStyle="#a8925f"; ctx.lineWidth=2.2;
+        ctx.beginPath();
+        ctx.moveTo(x-4,e.y-9); ctx.lineTo(x-8,e.y-18); ctx.moveTo(x-8,e.y-18); ctx.lineTo(x-13,e.y-16);
+        ctx.moveTo(x-8,e.y-18); ctx.lineTo(x-7,e.y-23);
+        ctx.moveTo(x+1,e.y-9); ctx.lineTo(x+4,e.y-19); ctx.moveTo(x+4,e.y-19); ctx.lineTo(x+9,e.y-17);
+        ctx.moveTo(x+4,e.y-19); ctx.lineTo(x+3,e.y-24);
+        ctx.stroke();
+        ctx.fillStyle="#2b1d10";
+        ctx.beginPath(); ctx.arc(x-5, e.y-6+bob*0.4, 1.4, 0, Math.PI*2); ctx.fill();
+      } else {
+        // wolf: low, lean, hackles up when hunting
+        ctx.strokeStyle = "#3d4147"; ctx.lineWidth=3.2; ctx.lineCap="round";
+        ctx.beginPath();
+        ctx.moveTo(x+9, e.y+16); ctx.lineTo(x+7+gait, e.y+24);
+        ctx.moveTo(x+25, e.y+16); ctx.lineTo(x+27-gait, e.y+24);
+        ctx.stroke();
+        ctx.fillStyle = lv.bigColor;
+        ctx.beginPath(); ctx.ellipse(x+17, e.y+11+bob*0.4, 17.5, 9.5, 0,0,Math.PI*2); ctx.fill();
+        // hackles
+        if (alarmed) {
+          ctx.fillStyle = "#3d4147";
+          for (let i=0;i<5;i++){
+            ctx.beginPath();
+            ctx.moveTo(x+8+i*5, e.y+3); ctx.lineTo(x+10+i*5, e.y-3); ctx.lineTo(x+12+i*5, e.y+3);
+            ctx.closePath(); ctx.fill();
+          }
+        }
+        ctx.fillStyle = "rgba(255,255,255,0.13)";
+        ctx.beginPath(); ctx.ellipse(x+18, e.y+7+bob*0.4, 13, 4, 0,0,Math.PI*2); ctx.fill();
+        // head + muzzle
+        ctx.fillStyle = lv.bigColor;
+        ctx.beginPath(); ctx.ellipse(x+2, e.y+4+bob*0.4, 7.5, 6, 0,0,Math.PI*2); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x-2, e.y+4); ctx.lineTo(x-10, e.y+7); ctx.lineTo(x-2, e.y+9);
+        ctx.closePath(); ctx.fill();
+        // ears
+        ctx.fillStyle="#3d4147";
+        ctx.beginPath(); ctx.moveTo(x-2,e.y-1); ctx.lineTo(x+1,e.y-9); ctx.lineTo(x+5,e.y-1); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x+5,e.y-1); ctx.lineTo(x+8,e.y-8); ctx.lineTo(x+11,e.y-1); ctx.closePath(); ctx.fill();
+        // tail
+        ctx.strokeStyle = lv.bigColor; ctx.lineWidth=5;
+        ctx.beginPath();
+        ctx.moveTo(x+33, e.y+9); ctx.quadraticCurveTo(x+43, e.y+6, x+41, e.y+16);
+        ctx.stroke();
+        // eye — amber, brighter when hunting
+        ctx.fillStyle = alarmed ? "#ffd35c" : "#c9a23c";
+        ctx.beginPath(); ctx.arc(x-0.5, e.y+2.5+bob*0.4, 1.6, 0, Math.PI*2); ctx.fill();
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPlayerSprite(){
+  const p = player;
+  const c = CARRIER;
+  const lv = curLevel();
+  const flash = (p.invT>0 && Math.floor(p.invT/4)%2===0);
+
+  const bx = p.x, by = p.y;
+  const moving = Math.abs(p.vx) > 0.4;
+  const stride = Math.sin(p.walkT) * (p.onGround && moving ? 1 : 0);
+  const duckOff = p.ducking ? 14 : 0;
+  const airborne = !p.onGround;
+  const mounted = p.vehicle==='sled';
+  // subtle vertical bounce while running; lean into acceleration
+  const bounce = p.onGround && moving ? Math.abs(Math.sin(p.walkT))*1.6 : 0;
+  const lean = clamp(p.vx*0.9, -7, 7);
+
+  // ---- contact shadow (grounds the sprite) ----
+  const shadowW = airborne ? 12 : 17;
+  ctx.save();
+  ctx.globalAlpha = airborne ? 0.16 : 0.3;
+  ctx.fillStyle = "#1c2430";
+  ctx.beginPath();
+  ctx.ellipse(bx+p.w/2, GROUND_Y+4, shadowW, 4.5, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  if (flash) ctx.globalAlpha = 0.45;
+
+  ctx.save();
+  ctx.translate(bx+p.w/2, by+p.h - bounce);
+  ctx.scale(p.facing, 1);
+
+  if (mounted) drawMount(lv);
+
+  // ---- legs ----
+  ctx.strokeStyle = "#2b1d10"; ctx.lineWidth = 5.5; ctx.lineCap="round";
+  if (mounted) {
+    ctx.beginPath();
+    ctx.moveTo(-4,-20); ctx.lineTo(-7,-8);
+    ctx.moveTo(4,-20); ctx.lineTo(7,-8);
+    ctx.stroke();
+  } else if (airborne) {
+    // tucked jump pose
+    ctx.beginPath();
+    ctx.moveTo(-4,-20); ctx.lineTo(-9,-9); ctx.lineTo(-6,-2);
+    ctx.moveTo(4,-20); ctx.lineTo(9,-11); ctx.lineTo(12,-4);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-4,-20); ctx.lineTo(-4+stride*5, 0);
+    ctx.moveTo(4,-20); ctx.lineTo(4-stride*5, 0);
+    ctx.stroke();
+    // boots
+    ctx.lineWidth = 6; ctx.strokeStyle = "#1c1208";
+    ctx.beginPath();
+    ctx.moveTo(-4+stride*5, 0); ctx.lineTo(-1+stride*5, 0);
+    ctx.moveTo(4-stride*5, 0); ctx.lineTo(7-stride*5, 0);
+    ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.rotate(lean*0.012);
+
+  // ---- coat ----
+  const bodyH = p.ducking ? 16 : 24;
+  const coatTop = -20-bodyH+duckOff;
+  const coatBot = -18+duckOff;
+  ctx.fillStyle = c.coat;
+  ctx.beginPath();
+  ctx.moveTo(-10, coatTop);
+  ctx.lineTo(10, coatTop);
+  ctx.lineTo(13, coatBot);
+  ctx.lineTo(-13, coatBot);
+  ctx.closePath(); ctx.fill();
+  // shaded side + lit side for volume
+  ctx.fillStyle = "rgba(0,0,0,0.20)";
+  ctx.beginPath();
+  ctx.moveTo(-10, coatTop); ctx.lineTo(-3, coatTop); ctx.lineTo(-4, coatBot); ctx.lineTo(-13, coatBot);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  ctx.beginPath();
+  ctx.moveTo(6, coatTop); ctx.lineTo(10, coatTop); ctx.lineTo(13, coatBot); ctx.lineTo(8, coatBot);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle="#2b1d10"; ctx.lineWidth=1.6; ctx.lineJoin="round";
+  ctx.beginPath();
+  ctx.moveTo(-10, coatTop); ctx.lineTo(10, coatTop); ctx.lineTo(13, coatBot); ctx.lineTo(-13, coatBot);
+  ctx.closePath(); ctx.stroke();
+  // coat buttons
+  ctx.fillStyle = "#e8d24a";
+  ctx.beginPath(); ctx.arc(2, coatTop+8, 1.3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(2, coatTop+15, 1.3, 0, Math.PI*2); ctx.fill();
+
+  // ---- satchel (the actual point of the game) ----
+  const satY = coatTop + 10;
+  ctx.fillStyle = "#7a5430";
+  ctx.fillRect(-17, satY, 10, 13);
+  ctx.fillStyle = "#5c3d20";
+  ctx.fillRect(-17, satY, 10, 4);
+  ctx.strokeStyle = "#3a2712"; ctx.lineWidth = 1.4;
+  ctx.strokeRect(-17, satY, 10, 13);
+  // strap across the chest
+  ctx.strokeStyle = "#5c3d20"; ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(-12, satY); ctx.lineTo(5, coatTop+3); ctx.stroke();
+  // brass buckle
+  ctx.fillStyle = "#e8d24a";
+  ctx.fillRect(-13.5, satY+5, 3, 2.5);
+
+  // ---- scarf, trailing in the wind ----
+  ctx.fillStyle = c.scarf;
+  ctx.fillRect(-8, coatTop-2, 16, 5);
+  const flick = Math.sin(world.time*0.16)*3 + (moving?-4:0);
+  ctx.beginPath();
+  ctx.moveTo(-7, coatTop-1);
+  ctx.quadraticCurveTo(-16, coatTop+2+flick*0.4, -21-Math.abs(p.vx)*1.4, coatTop+6+flick);
+  ctx.lineTo(-19-Math.abs(p.vx)*1.4, coatTop+10+flick);
+  ctx.quadraticCurveTo(-14, coatTop+8, -7, coatTop+4);
+  ctx.closePath(); ctx.fill();
+
+  // ---- arms ----
+  ctx.strokeStyle = c.coat; ctx.lineWidth=5.5; ctx.lineCap="round";
+  const armY = coatTop+7;
+  if (mounted) {
+    ctx.beginPath();
+    ctx.moveTo(-6,armY); ctx.lineTo(9,armY+7);
+    ctx.moveTo(6,armY); ctx.lineTo(14,armY+6);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-9,armY); ctx.lineTo(-13+stride*4, armY+13);
+    ctx.moveTo(9,armY); ctx.lineTo(13-stride*4, armY+13);
+    ctx.stroke();
+  }
+  // mittens
+  ctx.fillStyle = "#2b1d10";
+  ctx.beginPath(); ctx.arc(-13+stride*4, armY+13, 2.6, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(13-stride*4, armY+13, 2.6, 0, Math.PI*2); ctx.fill();
+
+  // ---- head ----
+  const headY = coatTop-6;
+  ctx.fillStyle = c.skin;
+  ctx.beginPath(); ctx.arc(0, headY, 8, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  ctx.beginPath(); ctx.arc(-2.5, headY, 8, Math.PI*0.5, Math.PI*1.5); ctx.fill();
+  // cheek color — cold, or heat-flushed on the dredge
+  ctx.fillStyle = isDry(lv) ? "rgba(200,110,80,0.35)" : "rgba(210,120,110,0.40)";
+  ctx.beginPath(); ctx.arc(4, headY+2.5, 2.6, 0, Math.PI*2); ctx.fill();
+  // eye
+  ctx.fillStyle="#2b1d10";
+  ctx.beginPath(); ctx.arc(4.5, headY-0.5, 1.3, 0, Math.PI*2); ctx.fill();
+
+  // ---- hat: fur-trimmed in cold, brimmed in heat ----
+  if (lv.key==='dredge') {
+    ctx.fillStyle = "#8a6a3a";
+    ctx.beginPath(); ctx.ellipse(0, headY-5, 12, 3.4, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#7a5c30";
+    ctx.beginPath(); ctx.ellipse(0, headY-8, 7, 5, 0, Math.PI, 0); ctx.fill();
+    ctx.fillRect(-7, headY-8, 14, 4);
+  } else {
+    ctx.fillStyle = "#2b1d10";
+    ctx.beginPath(); ctx.ellipse(0, headY-7, 9.5, 4.6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillRect(-9.5, headY-10, 19, 5);
+    // fur trim
+    ctx.fillStyle = "#cbbba0";
+    ctx.beginPath(); ctx.ellipse(0, headY-5.5, 10, 2.6, 0, 0, Math.PI*2); ctx.fill();
+    // ear flap
+    ctx.fillStyle = "#2b1d10";
+    ctx.beginPath(); ctx.ellipse(-8, headY+1, 3, 5, 0, 0, Math.PI*2); ctx.fill();
+  }
+
+  // ---- breath fog in the cold ----
+  if (!isDry(lv) && Math.sin(world.time*0.06)>0.72) {
+    ctx.globalAlpha *= 0.4;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(11, headY+1, 3.2, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(15, headY-0.5, 2.2, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha /= 0.4;
+  }
+
+  ctx.restore();  // lean
+  ctx.restore();  // sprite transform
+  ctx.globalAlpha = 1;
+}
+
+function drawMount(lv){
+  const weasel = lv.key==='roads' && lv.vehicleLabel==='WEASEL';
+  const jeep = (lv.key==='roads' && !weasel) || lv.key==='construction';
+  const cart = lv.key==='dredge' || lv.key==='decline';
+  const boat = lv.key==='reservoir';
+  const roll = world.x*0.12;
+
+  ctx.strokeStyle = "#2b1d10"; ctx.lineWidth=3; ctx.lineJoin="round";
+
+  if (boat) {
+    // a plain wooden rowboat, riding low with a set of oars
+    const bob = Math.sin(world.time*0.09)*1.6;
+    ctx.save(); ctx.translate(0, bob);
+    // hull, clinker-built planking
+    ctx.fillStyle = lv.vehicleBody;
+    ctx.beginPath();
+    ctx.moveTo(-30,4); ctx.quadraticCurveTo(-30,-10,-16,-12);
+    ctx.lineTo(16,-12); ctx.quadraticCurveTo(30,-10,30,4);
+    ctx.quadraticCurveTo(0,12,-30,4);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.22)"; ctx.lineWidth=1.2;
+    for (const py of [-6,-1,4]) { ctx.beginPath(); ctx.moveTo(-27,py); ctx.lineTo(27,py); ctx.stroke(); }
+    // gunwale rim
+    ctx.strokeStyle = lv.vehicleRunner; ctx.lineWidth=2.4;
+    ctx.beginPath(); ctx.moveTo(-30,-11); ctx.quadraticCurveTo(0,-16,30,-11); ctx.stroke();
+    // bench seat + satchel resting on it
+    ctx.fillStyle = lv.vehicleRunner;
+    ctx.fillRect(-10,-14,20,4);
+    // oars, dipping with the bob cycle
+    const oarA = Math.sin(world.time*0.09)*0.3;
+    ctx.strokeStyle = "#5c3d20"; ctx.lineWidth=3; ctx.lineCap="round";
+    ctx.save(); ctx.translate(-14,-10); ctx.rotate(-0.5+oarA);
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-26,6); ctx.stroke();
+    ctx.fillStyle="#5c3d20"; ctx.beginPath(); ctx.ellipse(-27,7,6,3,0.2,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    ctx.save(); ctx.translate(14,-10); ctx.rotate(0.5-oarA);
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(26,6); ctx.stroke();
+    ctx.fillStyle="#5c3d20"; ctx.beginPath(); ctx.ellipse(27,7,6,3,-0.2,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    ctx.restore();
+    // small wake ripples off the stern
+    ctx.strokeStyle = "rgba(232,240,240,0.4)"; ctx.lineWidth=1.2;
+    for (let i=0;i<2;i++){
+      const t=(world.time*2+i*20)%40;
+      ctx.globalAlpha = 1-t/40;
+      ctx.beginPath(); ctx.ellipse(-30-t, 6+bob, 6+t*0.3, 2, 0,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  } else if (cart) {
+    // ore cart: riveted tub on a rail truck
+    ctx.fillStyle = lv.vehicleBody;
+    ctx.beginPath();
+    ctx.moveTo(-19,-20); ctx.lineTo(21,-20); ctx.lineTo(17,2); ctx.lineTo(-15,2);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fillRect(-15,-18,7,19);
+    ctx.fillStyle = "#8a7a5a";
+    for (let i=-14;i<18;i+=8){ ctx.beginPath(); ctx.arc(i,-17,1.3,0,Math.PI*2); ctx.fill(); }
+    ctx.fillStyle = lv.vehicleRunner;
+    ctx.fillRect(-18,2,11,11); ctx.fillRect(8,2,11,11);
+    ctx.strokeRect(-18,2,11,11); ctx.strokeRect(8,2,11,11);
+  } else if (weasel) {
+    // M29 Weasel: boxy tracked hull
+    ctx.fillStyle = lv.vehicleBody;
+    ctx.beginPath();
+    ctx.moveTo(-27,-22); ctx.lineTo(19,-22); ctx.lineTo(25,-9); ctx.lineTo(25,2); ctx.lineTo(-27,2);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // windscreen
+    ctx.fillStyle = "rgba(190,215,230,0.55)";
+    ctx.beginPath(); ctx.moveTo(8,-21); ctx.lineTo(18,-21); ctx.lineTo(23,-11); ctx.lineTo(8,-11);
+    ctx.closePath(); ctx.fill();
+    // track skirt + rollers
+    ctx.fillStyle = lv.vehicleRunner;
+    ctx.beginPath(); ctx.moveTo(-29,2); ctx.lineTo(27,2); ctx.lineTo(27,12); ctx.lineTo(-29,12);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#3d3d3d";
+    for (let i=-26; i<26; i+=7){
+      const tx = i + ((roll % 7) + 7) % 7;
+      if (tx > -28 && tx < 26) ctx.fillRect(tx, 4, 4, 6);
+    }
+    ctx.fillStyle = "#6a6a6a";
+    ctx.beginPath(); ctx.arc(-20,7,3.4,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(18,7,3.4,0,Math.PI*2); ctx.fill();
+  } else if (jeep) {
+    // Mail Jeep: open-body flat fender
+    ctx.fillStyle = lv.vehicleBody;
+    ctx.beginPath();
+    ctx.moveTo(-24,-18); ctx.lineTo(-6,-18); ctx.lineTo(-4,-26); ctx.lineTo(14,-26);
+    ctx.lineTo(22,-14); ctx.lineTo(24,0); ctx.lineTo(-24,0);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // windscreen frame
+    ctx.strokeStyle = "#2b1d10"; ctx.lineWidth=2.4;
+    ctx.beginPath(); ctx.moveTo(-4,-26); ctx.lineTo(14,-26); ctx.stroke();
+    // seven-slot grille
+    ctx.fillStyle = "#d8cfae";
+    for (let i=0;i<5;i++) ctx.fillRect(16+i*1.9, -12, 1.1, 9);
+    // headlamp
+    ctx.fillStyle = "#ffe98a";
+    ctx.beginPath(); ctx.arc(21,-15,2.6,0,Math.PI*2); ctx.fill();
+    // mail star on the door
+    ctx.fillStyle = "#f2ead8";
+    ctx.beginPath();
+    for (let i=0;i<10;i++){
+      const a=(i/10)*Math.PI*2 - Math.PI/2, r=(i%2===0)?4.6:2;
+      i===0?ctx.moveTo(-8+Math.cos(a)*r,-8+Math.sin(a)*r):ctx.lineTo(-8+Math.cos(a)*r,-8+Math.sin(a)*r);
+    }
+    ctx.closePath(); ctx.fill();
+    // wheels with rotating spokes
+    ctx.fillStyle = "#1f1f1f";
+    for (const wxp of [-15, 15]) {
+      ctx.beginPath(); ctx.arc(wxp, 3, 9, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#8a8a8a";
+      ctx.beginPath(); ctx.arc(wxp, 3, 3.6, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = "#8a8a8a"; ctx.lineWidth=1.5;
+      for (let k=0;k<4;k++){
+        const a = roll*0.09 + k*Math.PI/2;
+        ctx.beginPath();
+        ctx.moveTo(wxp+Math.cos(a)*3, 3+Math.sin(a)*3);
+        ctx.lineTo(wxp+Math.cos(a)*8, 3+Math.sin(a)*8);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#1f1f1f";
+    }
+  } else {
+    // horse-drawn sled: bentwood runners
+    ctx.strokeStyle = "#2b1d10"; ctx.lineWidth=3.4;
+    ctx.beginPath();
+    ctx.moveTo(-24,8); ctx.lineTo(-18,-12); ctx.lineTo(18,-12);
+    ctx.quadraticCurveTo(27,-12, 26,2); ctx.stroke();
+    ctx.fillStyle = lv.vehicleBody;
+    ctx.beginPath();
+    ctx.moveTo(-18,-20); ctx.lineTo(18,-20); ctx.lineTo(20,-10); ctx.lineTo(-18,-10);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // slat detail
+    ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth=1.2;
+    for (let i=-14;i<18;i+=7){ ctx.beginPath(); ctx.moveTo(i,-19); ctx.lineTo(i,-11); ctx.stroke(); }
+    // runners
+    ctx.strokeStyle = lv.vehicleRunner; ctx.lineWidth=3.4;
+    ctx.beginPath(); ctx.moveTo(-26,9); ctx.lineTo(20,9);
+    ctx.quadraticCurveTo(28,9, 27,3); ctx.stroke();
+    // traces to the (offscreen) horse
+    ctx.strokeStyle = "#5c3d20"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(20,-14); ctx.lineTo(38,-18); ctx.stroke();
+  }
+}
+
+function drawParticles(){
+  for (const pt of particles) {
+    const k = clamp(pt.life/34,0,1);
+    ctx.globalAlpha = k*0.9;
+    ctx.fillStyle = pt.color;
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r*(0.35+k*0.65), 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+
+function drawSnow(){
+  const lv = curLevel();
+  const dredge = lv.key==='dredge';
+  const reservoir = lv.key==='reservoir';
+  const dry = isDry(lv) && !dredge;
+  const n = 46 + world.storm*1.7;
+
+  // two depth layers of precipitation/grit, different speed and size
+  for (let layer=0; layer<2; layer++){
+    const speed = layer===0 ? 1.0 : 2.1;
+    const size  = layer===0 ? 1.8 : 3.0;
+    ctx.globalAlpha = layer===0 ? (reservoir?0.22:0.35) : (reservoir?0.4:0.7);
+    ctx.fillStyle = dredge ? "#8b8060" : reservoir ? "#c4d2d4" : (dry ? "#c8a86a" : "#ffffff");
+    for (let i=0;i<n;i++){
+      const drift = (world.storm/100)*40;
+      const sx = ((i*97 + world.time*(1.1+layer*1.3)*speed + i*13) % (W+40)) - 20
+               + Math.sin((world.time*0.02)+i)*drift*0.2;
+      const sy = (i*53 + world.time*(1.9+(i%5))*speed) % (H+20);
+      if (dredge || dry) ctx.fillRect(sx, sy, size, size);
+      else {
+        // snow / mist: soft round flakes, slight sideways drift
+        ctx.beginPath();
+        ctx.arc(sx + Math.sin(world.time*0.04+i)*6, sy, size*(reservoir?1.4:0.7), 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // whiteout / dust-haze intensity as the danger meter climbs
+  if (world.storm > 32) {
+    const k = (world.storm-32)/68;
+    ctx.fillStyle = dredge ? `rgba(150,140,104,${k*0.34})`
+                  : reservoir ? `rgba(180,196,200,${k*0.36})`
+                  : dry    ? `rgba(214,180,120,${k*0.30})`
+                           : `rgba(238,246,252,${k*0.40})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // vignette — focuses the eye and deepens the frame
+  const vg = ctx.createRadialGradient(W/2, H*0.48, H*0.34, W/2, H*0.5, H*0.95);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(16,20,28,0.42)");
+  ctx.fillStyle = vg;
+  ctx.fillRect(0,0,W,H);
+}
+
+function drawAvalanche(){
+  if (!world.avalanche) return;
+  const lv = curLevel();
+  const wx = world.avalanche.wx - world.x;
+  const dredge = lv.key==='dredge';
+  const dry = isDry(lv) && !dredge;
+  const body = dredge ? "#8c8268" : (dry ? "#c9762e" : "#eef6fb");
+  const froth = dredge ? "#a89b78" : (dry ? "#ffb14d" : "#ffffff");
+
+  // churning mass
+  ctx.save();
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.moveTo(wx-340, H);
+  for (let i=0;i<=10;i++){
+    const yy = H - 50 - Math.sin(i*1.3 + world.time*0.22)*34 - i*34;
+    ctx.lineTo(wx-340+i*36, Math.max(10,yy));
+  }
+  ctx.lineTo(wx, H);
+  ctx.closePath();
+  ctx.fill();
+  // rolling froth lobes on the leading edge
+  ctx.fillStyle = froth;
+  for (let i=0;i<9;i++){
+    const t = world.time*0.3 + i*1.7;
+    const lx = wx - 30 - i*30 + Math.sin(t)*12;
+    const ly = H - 60 - i*30 + Math.cos(t*1.2)*16;
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath(); ctx.arc(lx, ly, 22 + Math.sin(t*0.7)*7, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // debris flung ahead of the wall
+  ctx.fillStyle = dredge ? "#5a5240" : (dry ? "#7a3a12" : "#b9cdd8");
+  for (let i=0;i<10;i++){
+    const t = (world.time*2.2 + i*37) % 150;
+    const dx = wx + t*1.1;
+    const dy = H - 90 - Math.sin(t*0.09+i)*70 + i*8;
+    if (dx < W+20) { ctx.fillRect(dx, dy, 5, 5); }
+  }
+
+  // corner warning chevrons — wordless "it's behind you, go"
+  const a = 0.55 + Math.sin(world.time*0.3)*0.45;
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.fillStyle = "#c9302c";
+  for (let i=0;i<3;i++){
+    const bx2 = 30 + i*26;
+    ctx.beginPath();
+    ctx.moveTo(bx2, 30); ctx.lineTo(bx2+16, 44); ctx.lineTo(bx2, 58);
+    ctx.lineTo(bx2+7, 44); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  // red edge flash on the trailing side of the screen
+  const eg = ctx.createLinearGradient(0,0,150,0);
+  eg.addColorStop(0, `rgba(201,48,44,${a*0.42})`);
+  eg.addColorStop(1, "rgba(201,48,44,0)");
+  ctx.fillStyle = eg;
+  ctx.fillRect(0,0,150,H);
+}
+
+function drawHUD(){
+  const lv = curLevel();
+  const px = 18, pw = 176;
+
+  // panel backing so the HUD reads over snow and rock alike
+  ctx.save();
+  ctx.fillStyle = "rgba(28,22,14,0.34)";
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(10, 12, pw+42, player.vehicle==='sled'?116:96, 8)
+                : ctx.rect(10, 12, pw+42, 96);
+  ctx.fill();
+  ctx.restore();
+
+  // resource: warmth / stamina / gasoline — icon instead of a word
+  hudBar(px+26, 20, pw, 13, player.warmth/100,
+         player.warmth<25 ? "#e0603f" : "#4a9edb");
+  hudGlyph(px+11, 26.5, lv.fuelMode ? 'can' : (isDry(lv) ? 'sun' : 'flame'));
+
+  // the mail itself
+  hudBar(px+26, 38, pw, 13, player.mail/100, "#c98a2b");
+  hudGlyph(px+11, 44.5, 'satchel');
+
+  // ambient danger meter
+  hudBar(px+26, 56, pw, 13, world.storm/100, "#b23b2e");
+  hudGlyph(px+11, 62.5, lv.key==='roads' && !lv.phase2Active ? 'flame' : 'storm');
+
+  // weapon: shell pips, filled = available
+  hudGlyph(px+11, 82, 'shell');
+  const maxPips = 6;
+  for (let i=0;i<maxPips;i++){
+    const bx = px+26+i*15, by = 76;
+    const has = i < player.flares;
+    ctx.fillStyle = has ? WEAPON_TIERS[player.weaponTier].color : "rgba(240,232,214,0.16)";
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(bx, by, 10, 12, 2.5) : ctx.rect(bx, by, 10, 12);
+    ctx.fill();
+    if (has) { ctx.fillStyle="rgba(0,0,0,0.35)"; ctx.fillRect(bx, by, 10, 3.5); }
+  }
+  // tier pips
+  for (let i=0;i<3;i++){
+    ctx.fillStyle = i<=player.weaponTier ? "#ffcf6b" : "rgba(240,232,214,0.18)";
+    ctx.beginPath(); ctx.arc(px+124+i*10, 82, 3, 0, Math.PI*2); ctx.fill();
+  }
+
+  // vehicle condition
+  if (player.vehicle==='sled') {
+    hudBar(px+26, 96, pw, 10, player.sledHP/100,
+           player.sledHP<34 ? "#e0603f" : lv.vehicleRunner);
+    hudGlyph(px+11, 101, 'wheel');
+  }
+
+  // stalled warning — pulsing icon, no words
+  if (player.vehicleStalled) {
+    const a = 0.55 + Math.sin(world.time*0.2)*0.45;
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(W/2, 74);
+    ctx.scale(1.15,1.15);
+    drawIconGlyph('fuelout');
+    ctx.restore();
+  }
+
+  // ---- route progress: a trail line with a carrier pip ----
+  const progress = clamp(world.x/world.length,0,1);
+  const rx = W-238, ry = 30, rw = 214;
+  ctx.save();
+  ctx.fillStyle="rgba(28,22,14,0.34)";
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(rx-12, 14, rw+26, 40, 8) : ctx.rect(rx-12, 14, rw+26, 40);
+  ctx.fill();
+  ctx.restore();
+  // track
+  ctx.strokeStyle="rgba(240,232,214,0.28)"; ctx.lineWidth=4; ctx.lineCap="round";
+  ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx+rw, ry); ctx.stroke();
+  ctx.strokeStyle="#e8b23c"; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx+rw*progress, ry); ctx.stroke();
+  // origin + destination markers
+  ctx.fillStyle="rgba(240,232,214,0.6)";
+  ctx.beginPath(); ctx.arc(rx, ry, 4, 0, Math.PI*2); ctx.fill();
+  // destination: little post-office flag
+  ctx.fillStyle="#b23b2e";
+  ctx.fillRect(rx+rw-1, ry-13, 2.5, 15);
+  ctx.beginPath();
+  ctx.moveTo(rx+rw+1.5, ry-13); ctx.lineTo(rx+rw+13, ry-9); ctx.lineTo(rx+rw+1.5, ry-5);
+  ctx.closePath(); ctx.fill();
+  // carrier pip
+  const cx = rx + rw*progress;
+  ctx.fillStyle="#f2ead8";
+  ctx.beginPath(); ctx.arc(cx, ry, 6, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle="#2b1d10"; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle="#7a5430";
+  ctx.fillRect(cx-2.5, ry-2, 5, 5);
+  // level pips beneath
+  for (let i=0;i<LEVELS.length;i++){
+    ctx.fillStyle = (i+1)<world.levelIdx ? "#e8b23c"
+                  : (i+1)===world.levelIdx ? "#f2ead8" : "rgba(240,232,214,0.25)";
+    ctx.beginPath(); ctx.arc(rx+rw-4-i*11, ry+16, 3.2, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function hudGlyph(x, y, kind){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.lineCap="round"; ctx.lineJoin="round";
+  switch(kind){
+    case 'flame':
+      ctx.fillStyle="#ffb14d";
+      ctx.beginPath();
+      ctx.moveTo(0,-7); ctx.quadraticCurveTo(5.5,-0.5,2.6,4);
+      ctx.quadraticCurveTo(0,7,-2.6,4); ctx.quadraticCurveTo(-5.5,-0.5,0,-7);
+      ctx.fill(); break;
+    case 'sun':
+      ctx.fillStyle="#ffb14d";
+      ctx.beginPath(); ctx.arc(0,0,3.6,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="#ffb14d"; ctx.lineWidth=1.6;
+      for (let i=0;i<8;i++){
+        const a=(i/8)*Math.PI*2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a)*5.2, Math.sin(a)*5.2);
+        ctx.lineTo(Math.cos(a)*7.6, Math.sin(a)*7.6);
+        ctx.stroke();
+      }
+      break;
+    case 'can':
+      ctx.fillStyle="#e8b23c";
+      ctx.fillRect(-5,-6,9,12);
+      ctx.fillStyle="#2b1d10"; ctx.fillRect(-3.4,-4.4,6,5);
+      ctx.fillStyle="#e8b23c"; ctx.fillRect(4,-4.5,3,3);
+      break;
+    case 'satchel':
+      ctx.fillStyle="#c98a2b";
+      ctx.fillRect(-6,-4,12,10);
+      ctx.fillStyle="#8a5f22"; ctx.fillRect(-6,-4,12,3.4);
+      ctx.strokeStyle="#8a5f22"; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.moveTo(-3,-4); ctx.lineTo(-3,-7.5);
+      ctx.moveTo(3,-4); ctx.lineTo(3,-7.5); ctx.stroke();
+      break;
+    case 'storm':
+      ctx.fillStyle="#cfd8e0";
+      ctx.beginPath(); ctx.arc(-2,-2,4,0,Math.PI*2); ctx.arc(2.5,-1,3.4,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="#b23b2e"; ctx.lineWidth=1.8;
+      ctx.beginPath(); ctx.moveTo(-2,3); ctx.lineTo(-3.5,7);
+      ctx.moveTo(2,3); ctx.lineTo(0.5,7); ctx.stroke();
+      break;
+    case 'shell':
+      ctx.fillStyle="#ffcf6b"; ctx.fillRect(-3.5,-2,7,8);
+      ctx.fillStyle="#b23b2e"; ctx.fillRect(-3.5,-7,7,5);
+      break;
+    case 'wheel':
+      ctx.strokeStyle="#cfd8e0"; ctx.lineWidth=1.8;
+      ctx.beginPath(); ctx.arc(0,0,5.2,0,Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,-5.2); ctx.lineTo(0,5.2);
+      ctx.moveTo(-5.2,0); ctx.lineTo(5.2,0); ctx.stroke();
+      break;
+  }
+  ctx.restore();
+}
+
+function hudBar(x,y,w,h,frac,color){
+  // recessed track
+  ctx.fillStyle="rgba(18,14,9,0.55)";
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(x,y,w,h,h/2) : ctx.rect(x,y,w,h);
+  ctx.fill();
+  // fill
+  const f = clamp(frac,0,1);
+  if (f > 0.01) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(x,y,w,h,h/2) : ctx.rect(x,y,w,h);
+    ctx.clip();
+    const g = ctx.createLinearGradient(x,y,x,y+h);
+    g.addColorStop(0, color);
+    g.addColorStop(1, "rgba(0,0,0,0.35)");
+    ctx.fillStyle=g;
+    ctx.fillRect(x,y,w*f,h);
+    ctx.fillStyle="rgba(255,255,255,0.28)";
+    ctx.fillRect(x,y+1.5,w*f,h*0.32);
+    ctx.restore();
+  }
+  ctx.strokeStyle="rgba(240,232,214,0.35)"; ctx.lineWidth=1.4;
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(x,y,w,h,h/2) : ctx.rect(x,y,w,h);
+  ctx.stroke();
+}
+
+function drawTitle(){
+  drawBackground(); drawGround();
+  // scrim
+  const sc = ctx.createLinearGradient(0,0,0,H);
+  sc.addColorStop(0,"rgba(14,20,36,0.62)");
+  sc.addColorStop(0.55,"rgba(14,20,36,0.34)");
+  sc.addColorStop(1,"rgba(14,20,36,0.70)");
+  ctx.fillStyle=sc; ctx.fillRect(0,0,W,H);
+  drawSnow();
+
+  // the carrier, walking in place on the title card
+  ctx.save();
+  ctx.translate(W/2 - 250, GROUND_Y);
+  ctx.scale(2.15, 2.15);
+  drawTitleCarrier(world.time*0.10);
+  ctx.restore();
+
+  ctx.textAlign="center";
+  // title with a stamped, embossed feel
+  ctx.font="bold 74px Georgia";
+  ctx.fillStyle="rgba(0,0,0,0.5)";
+  ctx.fillText("MAILTO", W/2+3, 187);
+  ctx.fillStyle="#f2ead8";
+  ctx.fillText("MAILTO", W/2, 184);
+  ctx.lineWidth=1.5; ctx.strokeStyle="rgba(232,178,60,0.75)";
+  ctx.strokeText("MAILTO", W/2, 184);
+
+  // rule + subtitle
+  ctx.strokeStyle="rgba(232,178,60,0.6)"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(W/2-190, 205); ctx.lineTo(W/2+190, 205); ctx.stroke();
+  ctx.font="19px Georgia"; ctx.fillStyle="#e8b23c";
+  ctx.fillText("Rocky Bar to Mountain Home \u2014 and on to what remains, Idaho", W/2, 234);
+  ctx.font="14px Georgia"; ctx.fillStyle="#cfc4ac";
+  ctx.fillText("Six legs, six post offices \u2014 one of them now underwater.", W/2, 260);
+
+  // control legend — icons, not paragraphs
+  const ly = 330;
+  drawKeyCap(W/2-176, ly, "\u2190\u2192", "move");
+  drawKeyCap(W/2-66,  ly, "\u2191", "jump");
+  drawKeyCap(W/2+24,  ly, "F", "signal");
+  drawKeyCap(W/2+114, ly, "\u2193", "duck");
+
+  // prompt
+  const a = 0.55 + Math.sin(world.time*0.12)*0.45;
+  ctx.globalAlpha = a;
+  ctx.font="bold 17px Georgia"; ctx.fillStyle="#f2ead8";
+  ctx.fillText("PRESS ENTER TO CARRY THE MAIL", W/2, 432);
+  ctx.globalAlpha = 1;
+  ctx.font="11px Georgia"; ctx.fillStyle="#8a7f6a";
+  ctx.fillText("press J for the jukebox \u2014 unlocked tracks download as .wav", W/2, 452);
+
+  ctx.font="11px Georgia"; ctx.fillStyle="#a99a7c";
+  ctx.fillText("Based on the 1864 toll road, and on Anderson Ranch Dam, which flooded Pine Grove for good in 1951.", W/2, 502);
+}
+
+function drawKeyCap(x, y, label, caption){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle="rgba(240,232,214,0.10)";
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(-21,-19,42,38,7) : ctx.rect(-21,-19,42,38);
+  ctx.fill();
+  ctx.strokeStyle="rgba(240,232,214,0.45)"; ctx.lineWidth=1.6; ctx.stroke();
+  ctx.fillStyle="#f2ead8"; ctx.font="bold 17px Georgia"; ctx.textAlign="center";
+  ctx.fillText(label, 0, 6);
+  ctx.fillStyle="#a99a7c"; ctx.font="11px Georgia";
+  ctx.fillText(caption, 0, 33);
+  ctx.restore();
+}
+
+function drawJukebox(){
+  ctx.fillStyle="rgba(10,8,5,0.82)"; ctx.fillRect(0,0,W,H);
+  ctx.textAlign="center";
+  ctx.fillStyle="#f2ead8"; ctx.font="bold 24px Georgia";
+  ctx.fillText("THE JUKEBOX", W/2, 96);
+  ctx.font="12px Georgia"; ctx.fillStyle="#a99a7c";
+  ctx.fillText("Every track unlocks the moment you reach that leg. \u2191\u2193 select \u00b7 ENTER download \u00b7 J close", W/2, 118);
+
+  const rowH = 40, top = 150;
+  TRACK_ORDER.forEach((name, i) => {
+    const y = top + i*rowH;
+    const unlocked = unlockedTracks.has(name);
+    const sel = i===jukeboxSel;
+    if (sel) {
+      ctx.fillStyle = "rgba(232,178,60,0.14)";
+      ctx.fillRect(W/2-320, y-24, 640, 34);
+      ctx.strokeStyle="rgba(232,178,60,0.6)"; ctx.lineWidth=1.5;
+      ctx.strokeRect(W/2-320, y-24, 640, 34);
+    }
+    // lock / note icon
+    ctx.save();
+    ctx.translate(W/2-290, y-7);
+    if (unlocked) {
+      ctx.fillStyle = sel ? "#ffcf6b" : "#cfc4ac";
+      ctx.beginPath(); ctx.arc(-4,4,5,0,Math.PI*2); ctx.fill();
+      ctx.fillRect(0,-10,3,14);
+      ctx.beginPath(); ctx.moveTo(3,-10); ctx.lineTo(11,-13); ctx.lineTo(11,-4); ctx.lineTo(3,-7); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.strokeStyle = "#6a6154"; ctx.lineWidth=2;
+      ctx.strokeRect(-6,-2,12,10);
+      ctx.beginPath(); ctx.arc(0,-2,5,Math.PI,0); ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.textAlign="left"; ctx.font= sel?"bold 15px Georgia":"14px Georgia";
+    ctx.fillStyle = unlocked ? "#f2ead8" : "#6a6154";
+    ctx.fillText(TRACK_INFO[name], W/2-260, y+1);
+
+    ctx.textAlign="right"; ctx.font="11px Georgia";
+    ctx.fillStyle = unlocked ? "#9fe8b4" : "#5a5248";
+    ctx.fillText(unlocked ? (sel ? "PRESS ENTER TO DOWNLOAD .WAV" : "UNLOCKED") : "LOCKED", W/2+310, y+1);
+  });
+}
+
+function drawTitleCarrier(t){
+  // simplified looping walk for the title card
+  const c = CARRIER;
+  const stride = Math.sin(t);
+  const bounce = Math.abs(Math.sin(t))*1.4;
+  ctx.save();
+  ctx.translate(0, -bounce);
+  ctx.strokeStyle="#2b1d10"; ctx.lineWidth=5; ctx.lineCap="round";
+  ctx.beginPath();
+  ctx.moveTo(-4,-20); ctx.lineTo(-4+stride*5,0);
+  ctx.moveTo(4,-20); ctx.lineTo(4-stride*5,0);
+  ctx.stroke();
+  ctx.fillStyle=c.coat;
+  ctx.beginPath();
+  ctx.moveTo(-10,-44); ctx.lineTo(10,-44); ctx.lineTo(13,-18); ctx.lineTo(-13,-18);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle="rgba(0,0,0,0.2)";
+  ctx.beginPath(); ctx.moveTo(-10,-44); ctx.lineTo(-3,-44); ctx.lineTo(-4,-18); ctx.lineTo(-13,-18);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle="#2b1d10"; ctx.lineWidth=1.6;
+  ctx.beginPath();
+  ctx.moveTo(-10,-44); ctx.lineTo(10,-44); ctx.lineTo(13,-18); ctx.lineTo(-13,-18);
+  ctx.closePath(); ctx.stroke();
+  // satchel
+  ctx.fillStyle="#7a5430"; ctx.fillRect(-17,-30,10,13);
+  ctx.strokeStyle="#3a2712"; ctx.lineWidth=1.4; ctx.strokeRect(-17,-30,10,13);
+  ctx.strokeStyle="#5c3d20"; ctx.lineWidth=2.4;
+  ctx.beginPath(); ctx.moveTo(-12,-30); ctx.lineTo(5,-41); ctx.stroke();
+  // scarf
+  ctx.fillStyle=c.scarf; ctx.fillRect(-8,-46,16,5);
+  const flick = Math.sin(t*1.6)*4;
+  ctx.beginPath();
+  ctx.moveTo(-7,-45);
+  ctx.quadraticCurveTo(-17,-41+flick*0.4,-24,-37+flick);
+  ctx.lineTo(-22,-33+flick);
+  ctx.quadraticCurveTo(-14,-38,-7,-41);
+  ctx.closePath(); ctx.fill();
+  // arms
+  ctx.strokeStyle=c.coat; ctx.lineWidth=5;
+  ctx.beginPath();
+  ctx.moveTo(-9,-37); ctx.lineTo(-13+stride*4,-24);
+  ctx.moveTo(9,-37); ctx.lineTo(13-stride*4,-24);
+  ctx.stroke();
+  // head
+  ctx.fillStyle=c.skin;
+  ctx.beginPath(); ctx.arc(0,-52,8,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="rgba(0,0,0,0.15)";
+  ctx.beginPath(); ctx.arc(-2.5,-52,8,Math.PI*0.5,Math.PI*1.5); ctx.fill();
+  ctx.fillStyle="rgba(210,120,110,0.4)";
+  ctx.beginPath(); ctx.arc(4,-49.5,2.6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="#2b1d10";
+  ctx.beginPath(); ctx.arc(4.5,-52.5,1.3,0,Math.PI*2); ctx.fill();
+  // hat
+  ctx.fillStyle="#2b1d10";
+  ctx.beginPath(); ctx.ellipse(0,-59,9.5,4.6,0,0,Math.PI*2); ctx.fill();
+  ctx.fillRect(-9.5,-62,19,5);
+  ctx.fillStyle="#cbbba0";
+  ctx.beginPath(); ctx.ellipse(0,-57.5,10,2.6,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawInterstitial(){
+  const lv = curLevel();
+  drawBackground(); drawGround(); drawObstacles();
+  ctx.fillStyle="rgba(14,20,36,0.72)"; ctx.fillRect(0,0,W,H);
+  drawEndCard(lv, "PRESS ENTER TO CONTINUE THE ROUTE", lv.nextNote);
+}
+
+function drawWin(){
+  const lv = curLevel();
+  drawBackground(); drawGround(); drawObstacles();
+  ctx.fillStyle="rgba(14,20,36,0.74)"; ctx.fillRect(0,0,W,H);
+  drawEndCard(lv, "PRESS ENTER TO RUN THE ROUTE AGAIN", lv.nextNote);
+}
+
+function drawEndCard(lv, prompt, note){
+  ctx.textAlign="center";
+  // delivered stamp
+  ctx.save();
+  ctx.translate(W/2, 116);
+  ctx.rotate(-0.09);
+  ctx.strokeStyle="#b23b2e"; ctx.lineWidth=3.5;
+  ctx.globalAlpha=0.9;
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(-132,-30,264,60,6) : ctx.rect(-132,-30,264,60);
+  ctx.stroke();
+  ctx.fillStyle="#b23b2e"; ctx.font="bold 27px Georgia";
+  ctx.fillText("DELIVERED", 0, 10);
+  ctx.restore();
+  ctx.globalAlpha=1;
+
+  ctx.fillStyle="#f2ead8"; ctx.font="bold 27px Georgia";
+  ctx.fillText(lv.destLabel.replace(" P.O.","").toUpperCase(), W/2, 190);
+  ctx.font="13px Georgia"; ctx.fillStyle="#a99a7c";
+  ctx.fillText(lv.subtitle || "", W/2, 208);
+
+  // tallies as bars, not sentences
+  const bw = 210;
+  ctx.textAlign="left";
+  ctx.fillStyle="#cfc4ac"; ctx.font="12px Georgia";
+  ctx.fillText("MAIL INTACT", W/2-bw/2, 236);
+  hudBar(W/2-bw/2, 242, bw, 13, player.mail/100, "#c98a2b");
+  ctx.fillStyle="#cfc4ac";
+  ctx.fillText(lv.fuelMode ? "FUEL REMAINING" : "RESERVES REMAINING", W/2-bw/2, 276);
+  hudBar(W/2-bw/2, 282, bw, 13, player.warmth/100, "#4a9edb");
+
+  ctx.textAlign="center";
+  ctx.font="13px Georgia"; ctx.fillStyle="#cfc4ac";
+  wrapText(lv.finishNote, W/2, 316, 620, 20);
+
+  ctx.font="12px Georgia"; ctx.fillStyle="#a99a7c";
+  wrapText(note, W/2, 440, 620, 18);
+
+  const a = 0.55 + Math.sin(world.time*0.12)*0.45;
+  ctx.globalAlpha = a;
+  ctx.font="bold 15px Georgia"; ctx.fillStyle="#f2ead8";
+  ctx.fillText(prompt, W/2, 494);
+  ctx.globalAlpha = 1;
+}
+
+function drawDead(){
+  const lv = curLevel();
+  ctx.fillStyle="#0e1424"; ctx.fillRect(0,0,W,H);
+  // scattered-mail motif
+  ctx.save();
+  for (let i=0;i<9;i++){
+    const a = i*0.7 + 0.3;
+    const x = W/2 + Math.cos(a)*(90+i*22);
+    const y = 150 + Math.sin(a*1.4)*40 + i*3;
+    ctx.globalAlpha = 0.16 + (i%3)*0.05;
+    ctx.save();
+    ctx.translate(x,y); ctx.rotate(Math.sin(a)*0.8);
+    ctx.fillStyle="#f2ead8"; ctx.fillRect(-13,-9,26,18);
+    ctx.strokeStyle="#8a8272"; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.moveTo(-13,-9); ctx.lineTo(0,1); ctx.lineTo(13,-9); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+  ctx.globalAlpha=1;
+
+  ctx.textAlign="center";
+  const lostMail = player && player.mail<=0;
+  ctx.fillStyle="#f2ead8"; ctx.font="bold 29px Georgia";
+  ctx.fillText(lostMail ? "THE SACK NEVER ARRIVED" : lv.deadTitle, W/2, 262);
+  ctx.font="13px Georgia"; ctx.fillStyle="#cfc4ac";
+  wrapText(lostMail
+    ? "Somewhere back on the trail the mail went everywhere but forward. The route doesn't care who was carrying it."
+    : lv.deadSubtitle, W/2, 294, 600, 20);
+
+  const a = 0.55 + Math.sin((world?world.time:0)*0.12)*0.45;
+  ctx.globalAlpha = a;
+  ctx.font="bold 15px Georgia"; ctx.fillStyle="#e8b23c";
+  ctx.fillText("PRESS ENTER TO TRY THE RUN AGAIN", W/2, 372);
+  ctx.globalAlpha = 1;
+}
+
+function wrapText(text,cx,y,maxW,lh){
+  const words = text.split(' ');
+  let line='', ly=y;
+  for (const w of words){
+    const test = line+w+' ';
+    if (ctx.measureText(test).width>maxW && line){
+      ctx.fillText(line, cx, ly); line=w+' '; ly+=lh;
+    } else line = test;
+  }
+  ctx.fillText(line, cx, ly);
+}
+
+// ============================================================
+// SECRET LEVEL — "PICK AXE PETE" homage
+// Magnavox Odyssey² (1982, Ed Averett). Single static mine shaft,
+// 7 floors, ladders that come and go, 3 doors that spew boulders.
+// Triggered from the title screen with the Konami code.
+// Rules per the original manual: evade a boulder = 1pt, destroy one
+// with the pick = 3pts, the pick wears out, colliding boulders can
+// drop a fresh pick or a key, a key lets you take a door deeper
+// (and recolors the level to match the door), no key at a door and
+// you get stuck — at the mercy of the next boulder through.
+// ============================================================
+const PA_FLOORS = 7;
+const PA_FLOOR_Y = [];
+for (let i=0;i<PA_FLOORS;i++) PA_FLOOR_Y.push(110+i*60);
+const PA_LADDER_X = [130,300,470,640,810];
+const PA_DOOR_FLOOR = 1;
+const PA_DOORS = [
+  { x:220, color:"#c9302c" },
+  { x:480, color:"#2b6cb0" },
+  { x:740, color:"#d4a017" },
+];
+
+function paReset(){
+  const gaps = [];
+  for (let g=0; g<PA_FLOORS-1; g++){
+    const slot = {};
+    PA_LADDER_X.forEach(x => { slot[x] = chance(0.55); });
+    if (!Object.values(slot).some(v=>v)) slot[PA_LADDER_X[Math.floor(rand(0,PA_LADDER_X.length))]] = true;
+    gaps.push(slot);
+  }
+  pa = {
+    score: 0,
+    depth: 1,
+    theme: "#8a6338",
+    time: 0,
+    introT: 110,
+    spawnT: 110,
+    spawnInterval: 150,
+    ladderGaps: gaps,
+    ladderTimer: 240,
+    boulders: [],
+    pickups: [],
+    pete: { floorIdx:3, x: W/2, facing:1, hasAxe:true, axeCharges:6, hasKey:false, jumpT:0, stuckT:0 },
+  };
+  paParticles = []; paFloaters = [];
+  paState = 'PLAY';
+}
+
+function paNearLadder(x, gapIdx){
+  const gap = pa.ladderGaps[gapIdx];
+  for (const xStr in gap) if (gap[xStr] && Math.abs(Number(xStr)-x) < 16) return true;
+  return false;
+}
+function paSpawnPickup(x){
+  if (chance(0.55)) pa.pickups.push({ type:'pick', x, floorIdx: PA_FLOORS-1, life: 500 });
+  else pa.pickups.push({ type:'key', x, y: PA_FLOOR_Y[PA_FLOORS-1], floorIdx: PA_FLOORS-1, life: 600 });
+}
+function paPuff(x,y){
+  for (let i=0;i<8;i++) paParticles.push({ x, y, vx:rand(-1,1), vy:rand(-1.5,-0.2), life:rand(12,20), color:"#e8b23c" });
+}
+function paFloat(x,y,text,color){ paFloaters.push({ x, y, text, color, life:60 }); }
+function paGameOver(){ paState = 'GAMEOVER'; }
+
+function updatePA(dt){
+  if (paState !== 'PLAY') return;
+  pa.time += dt;
+  if (pa.introT > 0) pa.introT -= dt;
+
+  pa.ladderTimer -= dt;
+  if (pa.ladderTimer <= 0) {
+    pa.ladderTimer = rand(180,260);
+    const g = Math.floor(rand(0, pa.ladderGaps.length));
+    const slot = PA_LADDER_X[Math.floor(rand(0, PA_LADDER_X.length))];
+    pa.ladderGaps[g][slot] = !pa.ladderGaps[g][slot];
+    if (!Object.values(pa.ladderGaps[g]).some(v=>v)) pa.ladderGaps[g][slot] = true;
+  }
+
+  const pete = pa.pete;
+  const left = keys['ArrowLeft']||keys['KeyA'];
+  const right = keys['ArrowRight']||keys['KeyD'];
+  const up = keys['ArrowUp']||keys['KeyW'];
+  const down = keys['ArrowDown']||keys['KeyS'];
+  const action = keys['Space'];
+
+  if (pete.stuckT > 0) pete.stuckT -= dt;
+  else if (pete.jumpT > 0) pete.jumpT -= dt;
+  else {
+    const canUp = pete.floorIdx>0 && paNearLadder(pete.x, pete.floorIdx-1);
+    const canDown = pete.floorIdx<PA_FLOORS-1 && paNearLadder(pete.x, pete.floorIdx);
+    if (up && canUp) pete.floorIdx--;
+    else if (down && canDown) pete.floorIdx++;
+    else {
+      if (left) { pete.x -= 2.6*dt; pete.facing=-1; }
+      if (right) { pete.x += 2.6*dt; pete.facing=1; }
+    }
+    pete.x = clamp(pete.x, 50, W-50);
+  }
+
+  if (action && !pete._actionLatch) {
+    pete._actionLatch = true;
+    if (pete.jumpT<=0 && pete.stuckT<=0) {
+      let hit = null, bestD = 40;
+      if (pete.hasAxe) {
+        for (const b of pa.boulders) {
+          if (b.floorIdx===pete.floorIdx) {
+            const d = (b.x-pete.x)*pete.facing;
+            if (d>0 && d<bestD) { bestD=d; hit=b; }
+          }
+        }
+      }
+      if (hit) {
+        hit._dead = true;
+        pa.score += 3;
+        pete.axeCharges--;
+        paPuff(hit.x, PA_FLOOR_Y[hit.floorIdx]);
+        if (pete.axeCharges<=0) pete.hasAxe = false;
+      } else {
+        pete.jumpT = 16;
+      }
+    }
+  }
+  if (!action) pete._actionLatch = false;
+
+  if (pete.floorIdx===PA_DOOR_FLOOR) {
+    let atDoor = null;
+    for (const d of PA_DOORS) if (Math.abs(pete.x-d.x)<18) atDoor = d;
+    if (atDoor && pete.stuckT<=0 && pete.jumpT<=0 && !pete._doorLatch) {
+      pete._doorLatch = true;
+      if (pete.hasKey) {
+        pete.hasKey = false;
+        pa.score += 20;
+        pa.depth++;
+        pa.theme = atDoor.color;
+        pa.boulders = [];
+        pa.spawnInterval = Math.max(70, 150 - pa.depth*4);
+        pa.spawnT = 70;
+        paFloat(pete.x, PA_FLOOR_Y[pete.floorIdx]-24, "DEEPER — LEVEL "+pa.depth, atDoor.color);
+      } else {
+        pete.stuckT = 50;
+        paFloat(pete.x, PA_FLOOR_Y[pete.floorIdx]-24, "STUCK!", "#ff8b6b");
+      }
+    } else if (!atDoor) pete._doorLatch = false;
+  } else pete._doorLatch = false;
+
+  pa.spawnT -= dt;
+  if (pa.introT<=0 && pa.spawnT<=0) {
+    pa.spawnT = pa.spawnInterval;
+    pa.spawnInterval = Math.max(55, pa.spawnInterval - 1.4);
+    const d = PA_DOORS[Math.floor(rand(0,PA_DOORS.length))];
+    pa.boulders.push({ x:d.x, floorIdx: PA_DOOR_FLOOR, dir: chance(0.5)?1:-1, vx: rand(1.3,1.9) });
+  }
+
+  for (const b of pa.boulders) {
+    b.x += b.dir*b.vx*dt;
+    if (b.x < 60 || b.x > W-60) {
+      b.x = clamp(b.x, 60, W-60);
+      if (b.floorIdx < PA_FLOORS-1) { b.floorIdx++; b.dir *= -1; }
+      else { b._dead = true; if (chance(0.4)) paSpawnPickup(b.x); }
+    }
+    if (!b._dead && b.floorIdx===pete.floorIdx && Math.abs(b.x-pete.x)<16 && pete.jumpT<=0) {
+      paGameOver();
+    }
+  }
+  pa.boulders = pa.boulders.filter(b=>!b._dead);
+
+  for (const pk of pa.pickups) {
+    if (pk.type==='key') {
+      pk.y -= 0.9*dt;
+      for (let i=0;i<PA_FLOOR_Y.length;i++) if (Math.abs(PA_FLOOR_Y[i]-pk.y)<10) pk.floorIdx = i;
+    }
+    pk.life -= dt;
+    if (pk.floorIdx===pete.floorIdx && Math.abs(pk.x-pete.x)<18 && pete.jumpT<=0) {
+      if (pk.type==='pick') { pete.hasAxe=true; pete.axeCharges=6; pa.score+=5; paFloat(pete.x,PA_FLOOR_Y[pete.floorIdx]-18,"NEW PICK +5","#e8b23c"); }
+      else { pete.hasKey=true; pa.score+=2; paFloat(pete.x,PA_FLOOR_Y[pete.floorIdx]-18,"KEY!","#ffe98a"); }
+      pk._dead = true;
+    }
+  }
+  pa.pickups = pa.pickups.filter(pk=>!pk._dead && pk.life>0);
+
+  for (const f of paFloaters) f.life -= dt;
+  paFloaters = paFloaters.filter(f=>f.life>0);
+  for (const pt of paParticles) { pt.x+=pt.vx*dt; pt.y+=pt.vy*dt; pt.life-=dt; }
+  paParticles = paParticles.filter(pt=>pt.life>0);
+}
+
+function drawPA(){
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0,0,W,H);
+
+  for (let i=0;i<PA_FLOORS;i++) {
+    ctx.fillStyle = pa.theme;
+    ctx.fillRect(40, PA_FLOOR_Y[i], W-80, 8);
+  }
+
+  ctx.strokeStyle = "#e8d24a"; ctx.lineWidth=4;
+  for (let g=0; g<pa.ladderGaps.length; g++){
+    for (const xStr in pa.ladderGaps[g]) {
+      if (!pa.ladderGaps[g][xStr]) continue;
+      const x = Number(xStr), y0 = PA_FLOOR_Y[g], y1 = PA_FLOOR_Y[g+1];
+      ctx.beginPath(); ctx.moveTo(x-8,y0); ctx.lineTo(x-8,y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x+8,y0); ctx.lineTo(x+8,y1); ctx.stroke();
+      for (let ry=y0+10; ry<y1; ry+=10) { ctx.beginPath(); ctx.moveTo(x-8,ry); ctx.lineTo(x+8,ry); ctx.stroke(); }
+    }
+  }
+
+  for (const d of PA_DOORS) {
+    ctx.fillStyle = d.color;
+    ctx.fillRect(d.x-14, PA_FLOOR_Y[PA_DOOR_FLOOR]-38, 28, 38);
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(d.x-14, PA_FLOOR_Y[PA_DOOR_FLOOR]-38, 28, 4);
+    ctx.fillRect(d.x-3, PA_FLOOR_Y[PA_DOOR_FLOOR]-20, 6, 6);
+  }
+
+  for (const b of pa.boulders) {
+    ctx.fillStyle = "#d4622b";
+    ctx.fillRect(b.x-10, PA_FLOOR_Y[b.floorIdx]-16, 20, 16);
+  }
+
+  for (const pk of pa.pickups) {
+    ctx.fillStyle = pk.type==='pick' ? "#c9c9c9" : "#ffe98a";
+    ctx.fillRect(pk.x-6, (pk.y!==undefined?pk.y:PA_FLOOR_Y[pk.floorIdx])-14, 12, 14);
+  }
+
+  const pete = pa.pete;
+  const hop = pete.jumpT>0 ? 16*Math.sin(clamp(pete.jumpT/16,0,1)*Math.PI) : 0;
+  const py = PA_FLOOR_Y[pete.floorIdx] - hop;
+  ctx.fillStyle = (pete.stuckT>0 && Math.floor(pete.stuckT/4)%2===0) ? "#ff8b6b" : "#f2ead8";
+  ctx.fillRect(pete.x-8, py-28, 16, 24);
+  ctx.fillStyle="#e8b23c";
+  ctx.fillRect(pete.x-6, py-34, 12, 8);
+  if (pete.hasAxe) {
+    ctx.strokeStyle="#c9c9c9"; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(pete.x+pete.facing*8, py-24); ctx.lineTo(pete.x+pete.facing*20, py-30); ctx.stroke();
+  }
+
+  ctx.textAlign="left"; ctx.fillStyle="#ffffff"; ctx.font="bold 20px monospace";
+  ctx.fillText("SCORE "+String(pa.score).padStart(4,'0'), 30, 40);
+  ctx.fillText("LEVEL "+pa.depth, W-160, 40);
+  ctx.font="12px monospace"; ctx.fillStyle="#cfcfcf";
+  ctx.fillText(pete.hasAxe ? "PICK "+pete.axeCharges : "PICK BROKEN — SPACE to jump", 30, 60);
+  if (pete.hasKey) { ctx.fillStyle="#ffe98a"; ctx.fillText("KEY", W-160, 60); }
+
+  ctx.textAlign="center";
+  for (const f of paFloaters) {
+    ctx.globalAlpha = clamp(f.life/60,0,1);
+    ctx.fillStyle=f.color; ctx.font="bold 13px monospace";
+    ctx.fillText(f.text, f.x, f.y - (60-f.life)*0.5);
+  }
+  ctx.globalAlpha=1;
+  for (const pt of paParticles) {
+    ctx.globalAlpha = clamp(pt.life/20,0,1);
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(pt.x, pt.y, 4, 4);
+  }
+  ctx.globalAlpha=1;
+
+  if (pa.introT > 0) {
+    ctx.fillStyle="rgba(0,0,0,0.55)"; ctx.fillRect(0,0,W,H);
+    ctx.textAlign="center"; ctx.fillStyle="#ffe98a"; ctx.font="bold 36px monospace";
+    ctx.fillText("PICK AXE PETE!", W/2, H/2-20);
+    ctx.font="13px monospace"; ctx.fillStyle="#cfcfcf";
+    ctx.fillText("a secret homage \u2014 Magnavox Odyssey\u00B2, 1982", W/2, H/2+14);
+    ctx.fillText("\u2190\u2192 walk  \u2191\u2193 ladders  SPACE swing/jump  ESC exit", W/2, H/2+38);
+  }
+
+  if (paState==='GAMEOVER') {
+    ctx.fillStyle="rgba(0,0,0,0.7)"; ctx.fillRect(0,0,W,H);
+    ctx.textAlign="center"; ctx.fillStyle="#ff8b6b"; ctx.font="bold 30px monospace";
+    ctx.fillText("BOWLED OVER!", W/2, H/2-20);
+    ctx.font="16px monospace"; ctx.fillStyle="#f2ead8";
+    ctx.fillText("SCORE "+pa.score+"   DEPTH "+pa.depth, W/2, H/2+14);
+    ctx.font="13px monospace"; ctx.fillStyle="#e8b23c";
+    ctx.fillText("ENTER TO PLAY AGAIN   \u00B7   ESC FOR THE MAIL ROUTE", W/2, H/2+50);
+  }
+}
+
+// ---------- MAIN LOOP ----------
+let lastT = performance.now();
+let enterLatch = false;
+let lastAudioState = null;
+
+function frame(now){
+  const dt = clamp((now-lastT)/16.67, 0, 3);
+  lastT = now;
+
+  const enter = keys['Enter'];
+  if (enter && !enterLatch) {
+    enterLatch = true;
+    if (state===STATE.TITLE && jukeboxOpen) {
+      // handled by the keydown listener (downloads the selected track)
+    } else {
+      sfxMenu();
+      if (state===STATE.TITLE) { resetGame(1, false); state = STATE.PLAY; }
+      else if (state===STATE.INTERSTITIAL) { resetGame(world.levelIdx+1, true); state = STATE.PLAY; }
+      else if (state===STATE.WIN) { resetGame(1, false); state = STATE.TITLE; }
+      else if (state===STATE.DEAD) { resetGame(world.levelIdx, true); state = STATE.PLAY; }
+      else if (state===STATE.PICKAXE && paState==='GAMEOVER') { paReset(); paState='PLAY'; }
+    }
+  }
+  if (!enter) enterLatch = false;
+
+  if (keys['Escape'] && (state===STATE.PICKAXE || state===STATE.WIN || state===STATE.DEAD)) state = STATE.TITLE;
+
+  // music + one-shot stingers follow state changes, not individual events
+  if (state !== lastAudioState) {
+    if (state===STATE.TITLE) playMusic('title');
+    else if (state===STATE.PLAY) { playMusic('l'+world.levelIdx); unlockTrack('l'+world.levelIdx); }
+    else if (state===STATE.PICKAXE) { playMusic('pickaxe'); unlockTrack('pickaxe'); }
+    else if (state===STATE.WIN) { stopMusic(); sfxWin(); }
+    else if (state===STATE.DEAD) { stopMusic(); sfxDead(); }
+    else if (state===STATE.INTERSTITIAL) stopMusic();
+    lastAudioState = state;
+  }
+
+  if (state===STATE.PICKAXE) updatePA(dt); else update(dt);
+
+  ctx.save();
+  if (world && world.shakeT>0) {
+    ctx.translate(rand(-4,4), rand(-3,3));
+  }
+
+  if (state===STATE.TITLE) { drawTitle(); if (jukeboxOpen) drawJukebox(); }
+  else if (state===STATE.PLAY) {
+    const mirrored = curLevel().mirrored;
+    ctx.save();
+    if (mirrored) { ctx.translate(W,0); ctx.scale(-1,1); }
+    drawBackground(); drawGround(); drawObstacles();
+    drawEnemies(); drawAvalanche(); drawPlayerSprite();
+    drawParticles(); drawIcons(); drawSnow();
+    ctx.restore();
+    drawHUD(); // always drawn un-mirrored — the HUD reads normally regardless
+  } else if (state===STATE.INTERSTITIAL) drawInterstitial();
+  else if (state===STATE.WIN) drawWin();
+  else if (state===STATE.DEAD) drawDead();
+  else if (state===STATE.PICKAXE) drawPA();
+
+  ctx.restore();
+  requestAnimationFrame(frame);
+}
+
+resetGame(1, false);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

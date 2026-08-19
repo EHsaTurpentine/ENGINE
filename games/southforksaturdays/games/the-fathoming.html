@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>THE FATHOMING!</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #14100a;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Georgia', 'Palatino Linotype', serif;
+    overflow: hidden;
+    color: #f2ead8;
+  }
+  #wrap {
+    position: relative;
+    box-shadow: 0 0 0 5px #241a10, 0 0 0 9px #6b4a2a, 0 0 0 10px #8a6338,
+                0 26px 70px rgba(0,0,0,0.7);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  canvas { display: block; background: #7a5c34; }
+  #hint {
+    position: absolute; bottom: -34px; left: 0; width: 100%;
+    text-align: center; font-size: 12px; color: #9a8f78; letter-spacing: 0.6px;
+  }
+  #hint b { color: #e8b23c; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+</div>
+<div id="hint">ROW <b>W</b>/<b>S</b> (or &uarr;/&darr;) &nbsp;&middot;&nbsp; STEER <b>A</b>/<b>D</b> (or &larr;/&rarr;) &nbsp;&middot;&nbsp; BRING IT ABOARD / SKIP <b>SPACE</b></div>
+<script>
+"use strict";
+/* ============================================================
+   THE FATHOMING! — browser build (MAILTO!-style hand-painted canvas)
+   Ported from the Playdate Lua source (main.lua / "Resurfacing").
+   Crank input replaced with hold-to-row keyboard controls — an
+   explicit, approved tangent from the Playdate version, not a
+   silent substitution.
+   Self-contained vanilla JS + Canvas. No dependencies, no image
+   assets except the embedded ENGINE QR code data-URI.
+   ============================================================ */
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ---------- RESOLUTION ----------
+// Logical coordinate space matches the Playdate source 1:1 (400x240)
+// so every position/radius/speed value ported below is the exact
+// number from main.lua. DRAW_SCALE renders that logical space at a
+// higher physical resolution for smooth painted linework, same
+// technique as ALTURAS PETE!'s browser reskin.
+const SCREEN_W = 400, SCREEN_H = 240;
+const DRAW_SCALE = 2.4;
+cv.width = SCREEN_W * DRAW_SCALE;
+cv.height = SCREEN_H * DRAW_SCALE;
+ctx.scale(DRAW_SCALE, DRAW_SCALE);
+
+// ---------- PALETTE (MAILTO!/ALTURAS PETE! established palette) ----------
+const PAL = {
+  ink:        "#241a10",
+  inkSoft:    "#3a2a1a",
+  parchment:  "#f2ead8",
+  parchment2: "#e8dcc0",
+  gold:       "#e8b23c",
+  goldBright: "#e8d24a",
+  rust:       "#b23b2e",
+  waterDeep:  "#5a4326",
+  waterMid:   "#7a5c34",
+  waterLite:  "#a9895a",
+  waterFoam:  "#f2ead8",
+  stone:      "#8a7f6a",
+  stoneDark:  "#5a5240",
+  wood:       "#6b4a2a",
+  woodDark:   "#4a3016",
+  snag:       "#3a281a",
+  ruin:       "#726048",
+  ruinDark:   "#4a3e2c",
+  sky1:       "#e8d8b0",
+  sky2:       "#c9a875",
+  pine:       "#2e2416",
+};
+
+function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+function shadeColor(hex, percent) {
+  // percent: -100..100, lighten positive / darken negative
+  let r = parseInt(hex.slice(1, 3), 16);
+  let g = parseInt(hex.slice(3, 5), 16);
+  let b = parseInt(hex.slice(5, 7), 16);
+  const t = percent < 0 ? 0 : 255;
+  const p = Math.abs(percent) / 100;
+  r = Math.round((t - r) * p) + r;
+  g = Math.round((t - g) * p) + g;
+  b = Math.round((t - b) * p) + b;
+  return "rgb(" + clamp(r,0,255) + "," + clamp(g,0,255) + "," + clamp(b,0,255) + ")";
+}
+function rgba(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return "rgba(" + r + "," + g + "," + b + "," + a + ")";
+}
+
+// ============================================================
+// AUDIO — procedural chiptune SFX + two looping background tracks,
+// same synth-per-event structure as the Lua source's sound module.
+// ============================================================
+let actx = null, masterGain, sfxGain, musicGain, audioReady = false;
+
+function initAudio() {
+  if (actx) { if (actx.state === "suspended") actx.resume(); return; }
+  try {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = actx.createGain(); masterGain.gain.value = 0.6; masterGain.connect(actx.destination);
+    sfxGain = actx.createGain(); sfxGain.gain.value = 0.9; sfxGain.connect(masterGain);
+    musicGain = actx.createGain(); musicGain.gain.value = 0.5; musicGain.connect(masterGain);
+    audioReady = true;
+  } catch (e) { audioReady = false; }
+}
+
+function tone(freq, dur, type, peakGain, bus, attack, decay, sustain, release) {
+  if (!actx || !freq) return;
+  attack = attack !== undefined ? attack : 0.01;
+  decay = decay !== undefined ? decay : 0.1;
+  sustain = sustain !== undefined ? sustain : 0.0;
+  release = release !== undefined ? release : 0.1;
+  const t = actx.currentTime;
+  const osc = actx.createOscillator();
+  osc.type = type || "sine";
+  osc.frequency.setValueAtTime(freq, t);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(peakGain, t + attack);
+  g.gain.linearRampToValueAtTime(peakGain * sustain, t + attack + decay);
+  g.gain.linearRampToValueAtTime(0.0001, t + attack + decay + Math.max(dur, release));
+  osc.connect(g); g.connect(bus || sfxGain);
+  osc.start(t);
+  osc.stop(t + attack + decay + Math.max(dur, release) + 0.05);
+}
+
+let noiseBuffer = null;
+function getNoiseBuffer() {
+  if (noiseBuffer) return noiseBuffer;
+  const len = actx.sampleRate * 2;
+  const buf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  noiseBuffer = buf;
+  return buf;
+}
+function noiseBurst(dur, peakGain, bus, attack, decay, sustain, release, lowpass) {
+  if (!actx) return;
+  attack = attack !== undefined ? attack : 0.01;
+  decay = decay !== undefined ? decay : 0.1;
+  sustain = sustain !== undefined ? sustain : 0.0;
+  release = release !== undefined ? release : 0.2;
+  const t = actx.currentTime;
+  const src = actx.createBufferSource();
+  src.buffer = getNoiseBuffer();
+  const filt = actx.createBiquadFilter();
+  filt.type = "lowpass";
+  filt.frequency.value = lowpass || 900;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(peakGain, t + attack);
+  g.gain.linearRampToValueAtTime(peakGain * sustain, t + attack + decay);
+  g.gain.linearRampToValueAtTime(0.0001, t + attack + decay + Math.max(dur, release));
+  src.connect(filt); filt.connect(g); g.connect(bus || sfxGain);
+  src.start(t);
+  src.stop(t + attack + decay + Math.max(dur, release) + 0.05);
+}
+
+function playOarStroke() { tone(110 + (Math.random() * 16 - 8), 0.16, "triangle", 0.30, sfxGain, 0.005, 0.1, 0.0, 0.15); }
+function playCollectChime() {
+  tone(330, 0.4, "sine", 0.45, sfxGain, 0.01, 0.15, 0.3, 0.4);
+  setTimeout(() => tone(440, 0.5, "sine", 0.45, sfxGain, 0.01, 0.15, 0.3, 0.4), 90);
+}
+function playSubmergeCue() { tone(90, 0.8, "sine", 0.28, sfxGain, 0.02, 0.35, 0.0, 0.6); }
+function playShoreStinger() {
+  tone(220, 1.2, "sine", 0.4, sfxGain, 0.05, 0.5, 0.4, 1.2);
+  setTimeout(() => tone(277, 2.0, "sine", 0.4, sfxGain, 0.05, 0.5, 0.4, 1.6), 500);
+}
+function playColdStinger() { tone(65, 2.2, "triangle", 0.32, sfxGain, 0.3, 0.7, 0.2, 1.4); }
+function playReadyTick() { tone(660, 0.05, "sine", 0.16, sfxGain, 0.005, 0.06, 0.0, 0.08); }
+function playThunderRumble() { noiseBurst(1.8, 0.3, sfxGain, 0.05, 1.0, 0.1, 1.6, 340); }
+function playBumpThud() { noiseBurst(0.1, 0.4, sfxGain, 0.001, 0.09, 0.0, 0.07, 500); }
+
+// ---------- MUSIC ----------
+const STEP_MS_TITLE = 300, STEP_MS_ENDING = 500;
+const TITLE_LEAD = [440,0,0,0, 329.63,0,0,0, 261.63,0,0,0, 293.66,0,0,0,
+                     440,0,0,0, 0,0,0,0, 220,0,0,0, 0,0,0,0];
+const TITLE_BASS = [220,0,0,0,0,0,0,0, 174.61,0,0,0,0,0,0,0,
+                     164.81,0,0,0,0,0,0,0, 174.61,0,0,0,0,0,0,0];
+const ENDING_LEAD = [392,0,0,0,0,0,0,0, 329.63,0,0,0,0,0,0,0,
+                      261.63,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0];
+const ENDING_BASS = [130.81,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                      130.81,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+
+let musicTimer = null, musicStepIndex = 0, musicLead = null, musicBass = null, musicStepMs = STEP_MS_TITLE;
+let musicPlaying = false, musicLeadWave = "square", musicBassWave = "triangle";
+
+function musicStep() {
+  if (!musicPlaying) return;
+  musicStepIndex = (musicStepIndex + 1) % musicLead.length;
+  const lf = musicLead[musicStepIndex];
+  if (lf) tone(lf, musicStepMs / 1000 * 0.9, musicLeadWave, 0.18, musicGain, 0.01, 0.15, 0.15, 0.3);
+  const bf = musicBass[musicStepIndex];
+  if (bf) tone(bf, musicStepMs / 1000 * 1.6, musicBassWave, 0.24, musicGain, 0.02, 0.3, 0.3, 0.5);
+}
+function startMusic(lead, bass, leadWave, bassWave, stepMs) {
+  stopMusic();
+  musicLead = lead; musicBass = bass;
+  musicLeadWave = leadWave; musicBassWave = bassWave;
+  musicStepMs = stepMs;
+  musicStepIndex = -1;
+  musicPlaying = true;
+  musicStep();
+  musicTimer = setInterval(musicStep, stepMs);
+}
+function stopMusic() {
+  musicPlaying = false;
+  if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
+}
+function startTitleMusic() { startMusic(TITLE_LEAD, TITLE_BASS, "square", "triangle", STEP_MS_TITLE); }
+function startEndingMusic() { startMusic(ENDING_LEAD, ENDING_BASS, "triangle", "sine", STEP_MS_ENDING); }
+
+// ============================================================
+// INPUT — hold-to-row keyboard controls. This is the one deliberate
+// tangent from the Playdate crank version, approved up front: no
+// crank in a browser, so propulsion is W/Up (row forward) and
+// S/Down (back-paddle), same keys drive the title/ending scroll
+// ("reading is rowing" carries over as a control-scheme idea even
+// though the exact input device doesn't). A/Left and D/Right steer,
+// matching the original's lateral crank-precision keys exactly.
+// SPACE is the single action button (collect / skip / continue).
+// ============================================================
+const keys = {};
+window.addEventListener("keydown", e => {
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space","KeyW","KeyA","KeyS","KeyD"].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+  initAudio();
+});
+window.addEventListener("keyup", e => { keys[e.code] = false; });
+function held(...codes) { return codes.some(c => keys[c]); }
+function rowForwardHeld() { return held("KeyW", "ArrowUp"); }
+function rowBackHeld() { return held("KeyS", "ArrowDown"); }
+function steerLeftHeld() { return held("KeyA", "ArrowLeft"); }
+function steerRightHeld() { return held("KeyD", "ArrowRight"); }
+let actionPressedLatch = false;
+window.addEventListener("keydown", e => {
+  if (e.code === "Space") actionPressedLatch = true;
+});
+function actionJustPressed() {
+  if (actionPressedLatch) { actionPressedLatch = false; return true; }
+  return false;
+}
+
+// ============================================================
+// TUNING — ported exactly from main.lua where the underlying unit
+// still applies to a browser build; CRANK_TO_THRUST is replaced by
+// ROW_THRUST_PER_FRAME (see input section above), calibrated so a
+// continuous hold approaches MAX_FORWARD_SPEED under the same DRAG.
+// ============================================================
+const TOTAL_DISTANCE      = 6000;
+const SHORE_WARNING_DIST  = 500;
+
+const ROW_THRUST_PER_FRAME = 0.22;   // replaces CRANK_TO_THRUST * crankDelta
+const DRAG                = 0.965;
+const MAX_FORWARD_SPEED   = 6.0;
+const LATERAL_SPEED       = 2.6;
+
+const NUM_STONES          = 11;
+const STONE_LIFETIME_MIN  = 500;
+const STONE_LIFETIME_MAX  = 900;
+const STONE_WARN_FRAMES   = 150;
+const COLLECT_RADIUS      = 34;
+const COLLECT_MAX_SPEED   = 2.6;
+const SPAWN_START_BUFFER  = 300;
+const SPAWN_END_BUFFER    = SHORE_WARNING_DIST + 250;
+
+const COLD_MAX            = 100;
+const COLD_DRIFT_DRAIN    = 0.035;
+const COLD_ROW_WARM       = 0.05;
+const COLD_BASE_DRAIN     = 0.012;
+
+const WEATHER_START_BUFFER = 400;
+const WEATHER_END_BUFFER   = 200;
+const WIND_FORCE_WIND      = 1.1;
+const WIND_FORCE_STORM     = 1.9;
+const GUST_EASE            = 0.03;
+const STORM_EXTRA_DRAG     = 0.996;
+const STORM_COLD_EXTRA     = 0.025;
+const WIND_COLD_EXTRA      = 0.010;
+
+const OBSTACLE_COUNT        = 20;
+const OBSTACLE_RADIUS       = 22;
+const OBSTACLE_MARKER_R     = 32;
+const OBSTACLE_START_BUFFER = 350;
+const OBSTACLE_END_BUFFER   = SHORE_WARNING_DIST + 150;
+const OBSTACLE_SPEED_MULT   = 0.30;
+const OBSTACLE_COLD_PENALTY = 6;
+
+const PANEL_SPAN       = 280;
+const LINE_SPACING     = 22;
+const READING_ROW      = 118;
+const READING_BOAT_Y   = 206;
+const SKYLINE_BASELINE = 34;
+
+const BOAT_SCREEN_Y = 170;
+
+function rng(lo, hi) { return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
+function rngf() { return Math.random(); }
+
+// ============================================================
+// STATE
+// ============================================================
+const GameState = { TITLE: 0, PLAY: 1, SHORE: 2, COLD: 3 };
+let state = GameState.TITLE;
+
+const boat = { x: SCREEN_W / 2, forwardSpeed: 0, distance: 0 };
+let rowingActive = false;
+
+let cold = COLD_MAX;
+let stonesRecovered = 0, stonesLost = 0;
+let stones = [], stoneSchedule = [], nextScheduleIndex = 0;
+let obstacles = [], obstacleSchedule = [], nextObstacleIndex = 0;
+
+// ---------- WEATHER ----------
+const Weather = { CALM: 1, WIND: 2, STORM: 3 };
+let weatherState = Weather.CALM;
+let weatherTimer = 60;
+let windStrength = 0, windTarget = 0, gustTimer = 0;
+let lightningTimer = 240, lightningFlash = 0;
+let firstWeatherRollDone = false;
+
+function pickGustTarget(magnitude) {
+  windTarget = (rng(0, 1) === 1 ? 1 : -1) * (rng(60, 100) / 100) * magnitude;
+  gustTimer = rng(70, 140);
+}
+function rollWeather() {
+  let roll = rng(1, 100);
+  if (!firstWeatherRollDone) { firstWeatherRollDone = true; roll = rng(46, 100); }
+  if (roll <= 45) { weatherState = Weather.CALM; weatherTimer = rng(250, 500); windTarget = 0; }
+  else if (roll <= 78) { weatherState = Weather.WIND; weatherTimer = rng(280, 520); pickGustTarget(WIND_FORCE_WIND); }
+  else { weatherState = Weather.STORM; weatherTimer = rng(320, 600); lightningTimer = rng(60, 200); pickGustTarget(WIND_FORCE_STORM); }
+}
+function updateWeather() {
+  const remaining = TOTAL_DISTANCE - boat.distance;
+  if (boat.distance < WEATHER_START_BUFFER || remaining < WEATHER_END_BUFFER) {
+    weatherState = Weather.CALM; windTarget = 0; windStrength *= 0.9; weatherTimer = 30; return;
+  }
+  weatherTimer -= 1;
+  if (weatherTimer <= 0) rollWeather();
+  if (weatherState !== Weather.CALM) {
+    gustTimer -= 1;
+    if (gustTimer <= 0) pickGustTarget(weatherState === Weather.STORM ? WIND_FORCE_STORM : WIND_FORCE_WIND);
+  }
+  windStrength += (windTarget - windStrength) * GUST_EASE;
+  if (weatherState === Weather.STORM) {
+    lightningTimer -= 1;
+    if (lightningTimer <= 0) {
+      lightningFlash = 6;
+      const delay = rng(300, 900);
+      setTimeout(playThunderRumble, delay * (1000 / 60));
+      lightningTimer = rng(200, 460);
+    }
+  }
+  if (lightningFlash > 0) lightningFlash -= 1;
+}
+
+// ---------- WATER / SHIMMER / SKYLINE ----------
+let waterScrollY = 0;
+let weatherParticles = [];
+const WEATHER_PARTICLE_MAX = 26;
+
+function spawnWeatherParticle() {
+  if (weatherParticles.length >= WEATHER_PARTICLE_MAX) return;
+  if (weatherState === Weather.STORM) weatherParticles.push({ x: rng(0, SCREEN_W), y: rng(-20, -2), kind: "rain", len: rng(6, 12) });
+  else weatherParticles.push({ x: rng(0, SCREEN_W), y: rng(-20, -2), kind: "foam", len: rng(4, 9) });
+}
+function updateWeatherParticles() {
+  let spawnChance = 0.08;
+  if (weatherState === Weather.WIND) spawnChance = 0.30;
+  if (weatherState === Weather.STORM) spawnChance = 0.55;
+  if (rngf() < spawnChance) spawnWeatherParticle();
+  for (let i = weatherParticles.length - 1; i >= 0; i--) {
+    const p = weatherParticles[i];
+    p.y += boat.forwardSpeed + (p.kind === "rain" ? 3 : 0);
+    p.x += windStrength * (p.kind === "rain" ? 0.6 : 0.35);
+    if (p.y > SCREEN_H + 5) weatherParticles.splice(i, 1);
+  }
+}
+function drawWeatherParticles() {
+  for (const p of weatherParticles) {
+    if (p.kind === "rain") {
+      ctx.strokeStyle = PAL.inkSoft; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - 3, p.y + p.len); ctx.stroke();
+    } else {
+      ctx.fillStyle = PAL.waterFoam;
+      ctx.fillRect(p.x, p.y, p.len, 1);
+    }
+  }
+}
+
+function drawWater() {
+  waterScrollY = (waterScrollY + boat.forwardSpeed) % 32;
+  const darken = (weatherState === Weather.STORM) ? 0.12 : 0;
+
+  const sky = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+  sky.addColorStop(0, shadeColor(PAL.waterLite, -darken * 100));
+  sky.addColorStop(0.5, shadeColor(PAL.waterMid, -darken * 100));
+  sky.addColorStop(1, shadeColor(PAL.waterDeep, -darken * 100));
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+
+  let y = -32 + waterScrollY, band = 0;
+  while (y < SCREEN_H) {
+    const alpha = ((band % 2 === 0) ? 0.10 : 0.05);
+    ctx.fillStyle = rgba(PAL.waterFoam, alpha - darken * 0.03);
+    ctx.fillRect(0, Math.floor(y), SCREEN_W, 3);
+    y += 32; band += 1;
+  }
+
+  drawWeatherParticles();
+
+  if (lightningFlash > 0) {
+    ctx.fillStyle = rgba(PAL.parchment, 0.35 * (lightningFlash / 6));
+    ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+  }
+}
+
+let shimmerSparkles = [];
+const SHIMMER_MAX = 22;
+function updateShimmer() {
+  if (shimmerSparkles.length < SHIMMER_MAX && rngf() < 0.5) {
+    shimmerSparkles.push({ x: rng(10, SCREEN_W - 10), y: rng(10, SCREEN_H - 10), life: rng(8, 26) });
+  }
+  for (let i = shimmerSparkles.length - 1; i >= 0; i--) {
+    shimmerSparkles[i].life -= 1;
+    if (shimmerSparkles[i].life <= 0) shimmerSparkles.splice(i, 1);
+  }
+}
+function drawShimmer() {
+  for (const s of shimmerSparkles) {
+    ctx.fillStyle = rgba(PAL.goldBright, 0.8);
+    ctx.fillRect(s.x, s.y, 1, 1);
+    if (s.life % 5 < 2) {
+      ctx.fillRect(s.x - 1, s.y, 1, 1);
+      ctx.fillRect(s.x + 1, s.y, 1, 1);
+    }
+  }
+}
+
+function drawPineSkyline() {
+  const treeCount = 11;
+  ctx.fillStyle = PAL.pine;
+  for (let i = 0; i < treeCount; i++) {
+    const tx = (i + 0.5) * (SCREEN_W / treeCount);
+    const th = 14 + ((i * 7) % 5) * 4;
+    ctx.beginPath();
+    ctx.moveTo(tx - 7, SKYLINE_BASELINE); ctx.lineTo(tx + 7, SKYLINE_BASELINE); ctx.lineTo(tx, SKYLINE_BASELINE - th);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(tx - 4, SKYLINE_BASELINE - th * 0.4); ctx.lineTo(tx + 4, SKYLINE_BASELINE - th * 0.4); ctx.lineTo(tx, SKYLINE_BASELINE - th * 0.8);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.fillRect(0, SKYLINE_BASELINE - 2, SCREEN_W, 2);
+}
+
+function drawShoreline() {
+  const remaining = TOTAL_DISTANCE - boat.distance;
+  if (remaining >= SHORE_WARNING_DIST) return;
+  const edgeY = BOAT_SCREEN_Y - remaining;
+  if (edgeY < -40) return;
+  const bandHeight = clamp(edgeY, 0, BOAT_SCREEN_Y);
+
+  const g = ctx.createLinearGradient(0, 0, 0, bandHeight);
+  g.addColorStop(0, PAL.pine);
+  g.addColorStop(1, shadeColor(PAL.pine, 25));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, SCREEN_W, bandHeight);
+
+  const peakCount = 6;
+  ctx.fillStyle = PAL.pine;
+  for (let i = 0; i < peakCount; i++) {
+    const px = (i + 0.5) * (SCREEN_W / peakCount);
+    const ph = 8 + (i % 3) * 6;
+    ctx.beginPath();
+    ctx.moveTo(px - 6, bandHeight); ctx.lineTo(px + 6, bandHeight); ctx.lineTo(px, bandHeight + ph);
+    ctx.closePath(); ctx.fill();
+  }
+}
+
+// ---------- STONES ----------
+function buildStoneSchedule() {
+  stoneSchedule = [];
+  const playableSpan = TOTAL_DISTANCE - SPAWN_START_BUFFER - SPAWN_END_BUFFER;
+  const slot = playableSpan / NUM_STONES;
+  for (let i = 0; i < NUM_STONES; i++) {
+    const base = SPAWN_START_BUFFER + i * slot;
+    const jitter = rng(0, Math.floor(slot * 0.6));
+    stoneSchedule.push(base + jitter);
+  }
+}
+function spawnStone(atDistance) {
+  stones.push({
+    worldDistance: atDistance, x: rng(60, SCREEN_W - 60), bob: rng(0, 628) / 100,
+    life: rng(STONE_LIFETIME_MIN, STONE_LIFETIME_MAX), state: "floating",
+    visible: false, targetable: false, ready: false, wasReady: false,
+  });
+}
+function drawStone(s, screenY, targetable, ready) {
+  const bobOffset = Math.sin((performance.now() / 400) + s.bob) * 2;
+  const cx = s.x, cy = screenY + bobOffset;
+  const w = 16, bodyH = 10, r = 8;
+  const tiltX = (s.bob > 3.14) ? 2 : -2;
+  const topCenterY = cy - bodyH / 2;
+
+  const g = ctx.createLinearGradient(cx - r, topCenterY - r, cx + r, topCenterY + bodyH);
+  g.addColorStop(0, shadeColor(PAL.stone, 15));
+  g.addColorStop(1, PAL.stoneDark);
+  ctx.fillStyle = g;
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+
+  ctx.beginPath(); ctx.arc(cx + tiltX, topCenterY, r, Math.PI, 0); ctx.fill(); ctx.stroke();
+  ctx.fillRect(cx - w / 2, topCenterY, w, bodyH);
+  ctx.strokeRect(cx - w / 2, topCenterY, w, bodyH);
+
+  ctx.fillStyle = rgba(PAL.parchment, 0.5);
+  ctx.fillRect(cx - w / 2 - 2, topCenterY + bodyH - 3, w + 4, 1);
+
+  if (s.life < STONE_WARN_FRAMES) {
+    const pulse = (STONE_WARN_FRAMES - s.life) / STONE_WARN_FRAMES;
+    const rr = r + 8 + pulse * 10;
+    ctx.strokeStyle = rgba(PAL.rust, 0.7); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  if (ready) {
+    ctx.strokeStyle = PAL.goldBright; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r + 14, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1;
+  } else if (targetable) {
+    ctx.strokeStyle = PAL.gold; ctx.lineWidth = 1;
+    const segs = 10;
+    for (let i = 0; i < segs; i++) {
+      if (i % 2 === 0) {
+        const a0 = (i / segs) * Math.PI * 2, a1 = ((i + 0.6) / segs) * Math.PI * 2;
+        ctx.beginPath(); ctx.arc(cx, cy, r + 14, a0, a1); ctx.stroke();
+      }
+    }
+  }
+}
+
+// ---------- OBSTACLES ----------
+function buildObstacleSchedule() {
+  obstacleSchedule = [];
+  const span = TOTAL_DISTANCE - OBSTACLE_START_BUFFER - OBSTACLE_END_BUFFER;
+  const slot = span / OBSTACLE_COUNT;
+  for (let i = 0; i < OBSTACLE_COUNT; i++) {
+    const base = OBSTACLE_START_BUFFER + i * slot;
+    const jitter = rng(0, Math.floor(slot * 0.7));
+    obstacleSchedule.push(base + jitter);
+  }
+}
+function spawnObstacle(atDistance) {
+  obstacles.push({ worldDistance: atDistance, x: rng(70, SCREEN_W - 70), kind: (rng(1, 2) === 1) ? "snag" : "ruin", hit: false, visible: false });
+}
+function drawSnag(cx, cy) {
+  ctx.strokeStyle = PAL.snag; ctx.lineWidth = 3; ctx.lineCap = "round";
+  const lines = [[cx, cy + 12, cx - 3, cy - 15], [cx - 3, cy - 15, cx - 13, cy - 24], [cx - 3, cy - 15, cx + 9, cy - 22],
+                 [cx, cy + 2, cx + 12, cy - 9], [cx + 2, cy - 4, cx - 8, cy - 12]];
+  for (const [x0, y0, x1, y1] of lines) { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); }
+  ctx.lineWidth = 1; ctx.lineCap = "butt";
+}
+function drawRuin(cx, cy) {
+  const g = ctx.createLinearGradient(cx - 14, cy - 10, cx + 14, cy + 10);
+  g.addColorStop(0, shadeColor(PAL.ruin, 10)); g.addColorStop(1, PAL.ruinDark);
+  ctx.fillStyle = g; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.fillRect(cx - 14, cy - 10, 28, 20); ctx.strokeRect(cx - 14, cy - 10, 28, 20);
+  ctx.fillStyle = PAL.waterDeep;
+  ctx.fillRect(cx - 14, cy - 10, 6, 4);
+  ctx.fillRect(cx - 2, cy - 10, 5, 6);
+  ctx.fillRect(cx + 8, cy - 10, 5, 3);
+  ctx.fillRect(cx - 14, cy + 5, 4, 5);
+}
+function drawHazardMarker(cx, cy, r) {
+  ctx.fillStyle = rgba(PAL.rust, 0.30);
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = rgba(PAL.rust, 0.85); ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.lineWidth = 1;
+}
+function drawObstacles() {
+  for (const o of obstacles) {
+    if (o.visible) {
+      const screenY = BOAT_SCREEN_Y - (o.worldDistance - boat.distance);
+      if (o.kind === "snag") drawSnag(o.x, screenY); else drawRuin(o.x, screenY);
+      drawHazardMarker(o.x, screenY, OBSTACLE_MARKER_R);
+    }
+  }
+}
+function updateObstacles() {
+  while (nextObstacleIndex < obstacleSchedule.length && boat.distance + SCREEN_H > obstacleSchedule[nextObstacleIndex]) {
+    spawnObstacle(obstacleSchedule[nextObstacleIndex]); nextObstacleIndex += 1;
+  }
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    const screenY = BOAT_SCREEN_Y - (o.worldDistance - boat.distance);
+    o.visible = screenY > -20 && screenY < SCREEN_H + 20;
+    if (o.visible && !o.hit) {
+      const dx = o.x - boat.x, dy = screenY - BOAT_SCREEN_Y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < OBSTACLE_RADIUS) {
+        o.hit = true;
+        boat.forwardSpeed *= OBSTACLE_SPEED_MULT;
+        cold -= OBSTACLE_COLD_PENALTY;
+        boat.x += (rng(0, 1) === 1) ? 10 : -10;
+        boat.x = clamp(boat.x, 20, SCREEN_W - 20);
+        playBumpThud();
+      }
+    }
+    if (screenY < -40) obstacles.splice(i, 1);
+  }
+}
+
+// ============================================================
+// STROKE ANIMATION — while a forward/back key is held, a continuous
+// swing cycle drives the oar animation and periodic oar-dip sound;
+// same idea as the Lua source's crank-driven stroke pulses, adapted
+// to a held key instead of discrete crank deltas.
+// ============================================================
+let strokePhase = 0;
+const STROKE_CYCLE_FRAMES = 26;
+let strokeCycleCounter = 0;
+
+function updateStrokeAnim(active) {
+  if (active) {
+    strokeCycleCounter += 1;
+    if (strokeCycleCounter >= STROKE_CYCLE_FRAMES) {
+      strokeCycleCounter = 0;
+      playOarStroke();
+    }
+    strokePhase = strokeCycleCounter / STROKE_CYCLE_FRAMES;
+  } else {
+    strokeCycleCounter = 0;
+    strokePhase = Math.max(0, strokePhase - 0.08);
+  }
+}
+
+// ---------- BOAT UPDATE ----------
+function updateBoat() {
+  const fwd = rowForwardHeld(), back = rowBackHeld();
+  rowingActive = fwd || back;
+  updateStrokeAnim(rowingActive);
+
+  if (fwd) boat.forwardSpeed += ROW_THRUST_PER_FRAME;
+  if (back) boat.forwardSpeed -= ROW_THRUST_PER_FRAME;
+
+  boat.forwardSpeed = clamp(boat.forwardSpeed, -MAX_FORWARD_SPEED * 0.5, MAX_FORWARD_SPEED);
+  boat.forwardSpeed *= DRAG;
+  if (weatherState === Weather.STORM) boat.forwardSpeed *= STORM_EXTRA_DRAG;
+
+  boat.distance = Math.max(0, boat.distance + boat.forwardSpeed);
+  boat.x += windStrength;
+
+  if (steerLeftHeld()) boat.x -= LATERAL_SPEED;
+  else if (steerRightHeld()) boat.x += LATERAL_SPEED;
+  boat.x = clamp(boat.x, 20, SCREEN_W - 20);
+}
+
+function updateCold() {
+  let extra = 0;
+  if (weatherState === Weather.WIND) extra = WIND_COLD_EXTRA;
+  if (weatherState === Weather.STORM) extra = STORM_COLD_EXTRA;
+  if (rowingActive) {
+    cold -= COLD_BASE_DRAIN + extra;
+    cold += COLD_ROW_WARM * 0.4;
+  } else {
+    cold -= COLD_BASE_DRAIN + COLD_DRIFT_DRAIN + extra;
+  }
+  cold = Math.min(cold, COLD_MAX);
+  if (cold <= 0) {
+    cold = 0;
+    state = GameState.COLD;
+    stopMusic();
+    playColdStinger();
+  }
+}
+
+let promptActive = false;
+function updateStones() {
+  promptActive = false;
+  while (nextScheduleIndex < stoneSchedule.length && boat.distance + SCREEN_H > stoneSchedule[nextScheduleIndex]) {
+    spawnStone(stoneSchedule[nextScheduleIndex]); nextScheduleIndex += 1;
+  }
+  for (let i = stones.length - 1; i >= 0; i--) {
+    const s = stones[i];
+    const screenY = BOAT_SCREEN_Y - (s.worldDistance - boat.distance);
+    s.visible = screenY > -20 && screenY < SCREEN_H + 20;
+    s.targetable = false; s.ready = false;
+
+    if (s.visible && s.state === "floating") {
+      s.life -= 1;
+      const dx = s.x - boat.x, dy = screenY - BOAT_SCREEN_Y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      s.targetable = dist < COLLECT_RADIUS;
+      s.ready = s.targetable && Math.abs(boat.forwardSpeed) < COLLECT_MAX_SPEED;
+
+      if (s.ready) {
+        promptActive = true;
+        if (!s.wasReady) playReadyTick();
+        if (actionJustPressed()) { s.state = "collected"; stonesRecovered += 1; playCollectChime(); }
+      }
+      s.wasReady = s.ready;
+
+      if (s.life <= 0) { s.state = "submerged"; stonesLost += 1; playSubmergeCue(); }
+    }
+    if (s.state !== "floating") stones.splice(i, 1);
+  }
+}
+function drawStones() {
+  for (const s of stones) {
+    if (s.visible && s.state === "floating") {
+      const screenY = BOAT_SCREEN_Y - (s.worldDistance - boat.distance);
+      drawStone(s, screenY, s.targetable, s.ready);
+    }
+  }
+}
+
+// ---------- BOAT DRAW ----------
+const HULL_POINTS = [[0,-14],[7,-4],[11,4],[8,10],[-8,10],[-11,4],[-7,-4]];
+function rotateOffset(px, py, angleRad) {
+  const c = Math.cos(angleRad), s = Math.sin(angleRad);
+  return [px * c - py * s, px * s + py * c];
+}
+function fillHull(cx, cy, scale, angleRad, fillStyle) {
+  ctx.beginPath();
+  HULL_POINTS.forEach((pt, i) => {
+    const ox = pt[0] * scale, oy = pt[1] * scale;
+    const [rx, ry] = rotateOffset(ox, oy, angleRad);
+    if (i === 0) ctx.moveTo(cx + rx, cy + ry); else ctx.lineTo(cx + rx, cy + ry);
+  });
+  ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1; ctx.stroke();
+}
+function drawBoat(baseX, baseY, lean) {
+  lean = lean || 0;
+  const bobY = Math.sin(Math.min(strokePhase, 1) * Math.PI) * 2;
+  const x = baseX, y = baseY + bobY;
+
+  if (Math.abs(boat.forwardSpeed) > 0.3 && state === GameState.PLAY) {
+    ctx.fillStyle = rgba(PAL.waterFoam, 0.35);
+    ctx.fillRect(x - 10, y + 12, 20, 2);
+    ctx.fillStyle = rgba(PAL.waterFoam, 0.55);
+    ctx.fillRect(x - 6, y + 18, 12, 2);
+  }
+
+  const hullGrad = ctx.createLinearGradient(x, y - 14, x, y + 10);
+  hullGrad.addColorStop(0, shadeColor(PAL.wood, 20));
+  hullGrad.addColorStop(1, PAL.woodDark);
+  fillHull(x, y, 1.0, lean, hullGrad);
+  fillHull(x, y + 1, 0.55, lean, rgba(PAL.parchment, 0.35));
+
+  ctx.fillStyle = PAL.inkSoft;
+  ctx.beginPath(); ctx.arc(x, y - 6, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = PAL.wood;
+  ctx.fillRect(x - 3, y - 3, 6, 8);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1; ctx.strokeRect(x - 3, y - 3, 6, 8);
+
+  const swing = Math.sin(Math.min(strokePhase, 1) * Math.PI);
+  const reach = 14;
+  const lx = x - 8 - reach * (0.4 + swing * 0.6), ly = y - 2 - swing * 6;
+  const rx = x + 8 + reach * (0.4 + swing * 0.6), ry = y - 2 - swing * 6;
+
+  ctx.strokeStyle = PAL.woodDark; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x - 8, y - 2); ctx.lineTo(lx, ly); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x + 8, y - 2); ctx.lineTo(rx, ry); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = PAL.ink;
+  ctx.fillRect(lx - 3, ly - 1, 6, 2);
+  ctx.fillRect(rx - 3, ry - 1, 6, 2);
+}
+
+function drawWindIndicator() {
+  if (Math.abs(windStrength) < 0.15) return;
+  const dir = (windStrength > 0) ? 1 : -1;
+  const mag = Math.min(Math.abs(windStrength) / WIND_FORCE_STORM, 1);
+  const cx = SCREEN_W / 2, y = 20;
+  const len = 14 + mag * 18;
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx - dir * len / 2, y); ctx.lineTo(cx + dir * len / 2, y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + dir * len / 2, y); ctx.lineTo(cx + dir * (len / 2 - 6), y - 5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + dir * len / 2, y); ctx.lineTo(cx + dir * (len / 2 - 6), y + 5); ctx.stroke();
+  ctx.lineWidth = 1;
+}
+
+function drawHUD() {
+  ctx.fillStyle = PAL.ink;
+  ctx.font = "bold 12px Georgia";
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillText("* " + stonesRecovered, 8, 16);
+
+  const barW = 80, barH = 8, bx = SCREEN_W - barW - 8, by = 8;
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1; ctx.strokeRect(bx, by, barW, barH);
+  const coldFrac = cold / COLD_MAX;
+  ctx.fillStyle = coldFrac < 0.3 ? PAL.rust : PAL.gold;
+  ctx.fillRect(bx, by, barW * coldFrac, barH);
+
+  const pw = SCREEN_W - 16;
+  ctx.strokeStyle = PAL.ink; ctx.strokeRect(8, SCREEN_H - 14, pw, 4);
+  ctx.fillStyle = PAL.goldBright;
+  ctx.fillRect(8, SCREEN_H - 14, pw * Math.min(boat.distance / TOTAL_DISTANCE, 1), 4);
+
+  if (promptActive) {
+    ctx.fillStyle = PAL.ink; ctx.textAlign = "center";
+    ctx.fillText("SPACE — bring it aboard", SCREEN_W / 2, SCREEN_H - 24);
+    ctx.textAlign = "left";
+  }
+  drawWindIndicator();
+}
+
+// ============================================================
+// CRANK-SCROLLED NARRATIVE -> now ROW-SCROLLED NARRATIVE. Same
+// panel/scroll-distance system as the Lua source; readDistance is
+// driven by the same hold-to-row input and physics as gameplay
+// propulsion, so "reading is rowing" still holds even though the
+// device changed.
+// ============================================================
+function drawLegibleLine(text, y) {
+  ctx.font = "13px Georgia";
+  const w = ctx.measureText(text).width;
+  ctx.fillStyle = rgba(PAL.parchment, 0.92);
+  ctx.fillRect(SCREEN_W / 2 - w / 2 - 6, y - 12, w + 12, 18);
+  ctx.strokeStyle = rgba(PAL.gold, 0.5); ctx.lineWidth = 1;
+  ctx.strokeRect(SCREEN_W / 2 - w / 2 - 6, y - 12, w + 12, 18);
+  ctx.fillStyle = PAL.ink;
+  ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  ctx.fillText(text, SCREEN_W / 2, y);
+  ctx.textAlign = "left";
+}
+function drawLegibleImage(img, y) {
+  const w = img.width, h = img.height;
+  ctx.fillStyle = rgba(PAL.parchment, 0.95);
+  ctx.fillRect(SCREEN_W / 2 - w / 2 - 10, y - 10, w + 20, h + 20);
+  ctx.strokeStyle = rgba(PAL.gold, 0.6); ctx.lineWidth = 1;
+  ctx.strokeRect(SCREEN_W / 2 - w / 2 - 10, y - 10, w + 20, h + 20);
+  ctx.drawImage(img, SCREEN_W / 2 - w / 2, y);
+}
+
+function buildScrollLines(panels) {
+  const out = [];
+  panels.forEach((panel, p) => {
+    const n = panel.length;
+    panel.forEach((entry, i) => {
+      const dist = p * PANEL_SPAN - (i - (n - 1) / 2) * LINE_SPACING;
+      if (typeof entry === "object" && entry.image) out.push({ image: entry.image, dist });
+      else out.push({ text: entry, dist });
+    });
+  });
+  return out;
+}
+function drawScrollLines(lines, readDistance) {
+  for (const item of lines) {
+    const y = READING_ROW - item.dist + readDistance;
+    if (y > -250 && y < SCREEN_H + 250) {
+      if (item.image) drawLegibleImage(item.image, y); else drawLegibleLine(item.text, y);
+    }
+  }
+}
+
+let readDistance = 0, readSpeed = 0, scrollLines = [], scrollLength = 0;
+function updateReadScroll() {
+  const fwd = rowForwardHeld(), back = rowBackHeld();
+  updateStrokeAnim(fwd || back);
+  if (fwd) readSpeed += ROW_THRUST_PER_FRAME;
+  if (back) readSpeed -= ROW_THRUST_PER_FRAME;
+  readSpeed = clamp(readSpeed, -MAX_FORWARD_SPEED * 0.5, MAX_FORWARD_SPEED);
+  readSpeed *= DRAG;
+  readDistance += readSpeed;
+  if (readDistance < 0) { readDistance = 0; readSpeed = 0; }
+}
+
+// ---------- QR CODE IMAGE (ENGINE site, embedded data URI) ----------
+const qrImage = new Image();
+qrImage.src = "data:image/png;base64,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";
+
+// ---------- NARRATIVE TEXT ----------
+const TITLE_PANELS = [
+  ["THE FATHOMING!", "Anderson Ranch Reservoir, first fill \u2014 1951"],
+  [
+    "Long before any dam or road, the",
+    "Boise Shoshone wintered and fished",
+    "this valley \u2014 and the Tukudeka moved",
+    "the high country above it with the",
+    "bighorn sheep, as their people had",
+    "for more than ten thousand years.",
+  ],
+  [
+    "Gold brought miners into the",
+    "Sheepeater winter camps in the 1860s.",
+    "Removal and war followed. By the time",
+    "the first dam survey stakes went into",
+    "this ground, that erasure was already",
+    "two generations old.",
+  ],
+  [
+    "By the 1940s the gold was long",
+    "gone. So were most of the trees.",
+    "Downstream at Junction Bar, dredge",
+    "tailings stood in ridges for as far",
+    "as the eye could see \u2014 a valley",
+    "already wrecked, long before",
+    "anyone raised a dam.",
+  ],
+  [
+    "Anderson Ranch Dam was part of",
+    "the Boise Project \u2014 irrigation",
+    "for Boise, Nampa, and Caldwell,",
+    "same as its sister dam at",
+    "Arrowrock. In 1951 it closed,",
+    "and buried Pine Grove for good.",
+  ],
+  [
+    "Pine Grove's cemetery had to",
+    "move too. A contractor hired",
+    "help to shift the graves \u2014",
+    "many coffins had caved in.",
+    "Some families refused to let",
+    "their dead be disturbed at all.",
+  ],
+  [
+    "It ended in gunfire before",
+    "the sheriff arrived. The work",
+    "went on anyway \u2014 most of it",
+    "got done. Not quite all of it.",
+    "You're rowing back to Pine.",
+    "Bring in what you can find.",
+  ],
+];
+const TITLE_SCROLL_LINES = buildScrollLines(TITLE_PANELS);
+const TITLE_SCROLL_LENGTH = (TITLE_PANELS.length - 1) * PANEL_SPAN + PANEL_SPAN;
+
+const SHORE_REFLECTION_LINES = [
+  "What surfaced today isn't the",
+  "only thing still down there.",
+  "Pine Grove is. So is everything",
+  "that came before Pine Grove \u2014",
+  "camps, trails, winters \u2014 for longer",
+  "than anyone kept a written count.",
+];
+const SHORE_CLOSING_LINES = [
+  "The water doesn't give any of it",
+  "back. Only, sometimes, for a",
+  "moment, lets you see.",
+];
+
+function buildEndingPanels() {
+  const statsPanel = ["You reach Pine.", stonesRecovered + " brought in."];
+  if (stonesLost > 0) statsPanel.push(stonesLost + " went back under.");
+  return [
+    statsPanel,
+    SHORE_REFLECTION_LINES,
+    SHORE_CLOSING_LINES,
+    ["POST TENEBRAS LUX"],
+    ["TRY. FAIL. LEARN."],
+    ["LUX ESTO UMBRAS FINDENS"],
+    [{ image: qrImage }],
+  ];
+}
+
+function enterTitleScroll() { scrollLines = TITLE_SCROLL_LINES; scrollLength = TITLE_SCROLL_LENGTH; readDistance = 0; readSpeed = 0; }
+function enterEndingScroll() {
+  const panels = buildEndingPanels();
+  scrollLines = buildScrollLines(panels);
+  scrollLength = (panels.length - 1) * PANEL_SPAN + PANEL_SPAN;
+  readDistance = 0; readSpeed = 0;
+}
+
+function drawColdEnding() {
+  ctx.fillStyle = PAL.parchment; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+  ctx.fillStyle = PAL.ink; ctx.textAlign = "center"; ctx.font = "14px Georgia";
+  ctx.fillText("The cold gets to you.", SCREEN_W / 2, 100);
+  ctx.fillText(stonesRecovered + " brought in before you turned back.", SCREEN_W / 2, 124);
+  ctx.font = "12px Georgia"; ctx.fillStyle = PAL.rust;
+  ctx.fillText("SPACE to row again", SCREEN_W / 2, 190);
+  ctx.textAlign = "left";
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+function resetRun() {
+  boat.x = SCREEN_W / 2; boat.forwardSpeed = 0; boat.distance = 0;
+  cold = COLD_MAX; stonesRecovered = 0; stonesLost = 0;
+  stones = []; nextScheduleIndex = 0;
+  obstacles = []; nextObstacleIndex = 0;
+  weatherState = Weather.CALM; weatherTimer = 60; windStrength = 0; windTarget = 0; gustTimer = 0;
+  lightningTimer = 240; lightningFlash = 0; firstWeatherRollDone = false;
+  waterScrollY = 0; weatherParticles = []; shimmerSparkles = [];
+  strokePhase = 0; strokeCycleCounter = 0; promptActive = false;
+}
+function startPlay() {
+  resetRun(); buildStoneSchedule(); buildObstacleSchedule(); stopMusic(); state = GameState.PLAY;
+}
+function returnToTitle() {
+  resetRun(); enterTitleScroll(); startTitleMusic(); state = GameState.TITLE;
+}
+
+enterTitleScroll();
+
+let started = false;
+function ensureStarted() {
+  if (!started) { started = true; startTitleMusic(); }
+}
+
+function frame() {
+  ensureStarted();
+
+  if (state === GameState.TITLE) {
+    drawWater(); updateShimmer(); drawShimmer(); drawPineSkyline();
+    updateReadScroll();
+    drawScrollLines(scrollLines, readDistance);
+    drawBoat(SCREEN_W / 2, READING_BOAT_Y, 0);
+    if (readDistance > scrollLength) startPlay();
+
+    ctx.fillStyle = PAL.ink; ctx.font = "11px Georgia"; ctx.textAlign = "left";
+    ctx.fillText("SPACE skip", 8, SCREEN_H - 8);
+    ctx.textAlign = "right";
+    ctx.fillText("W/S row \u00b7 A/D steer", SCREEN_W - 8, SCREEN_H - 8);
+    ctx.textAlign = "left";
+
+    if (actionJustPressed()) startPlay();
+
+  } else if (state === GameState.PLAY) {
+    updateWeather(); updateBoat(); updateCold(); updateStones(); updateObstacles(); updateWeatherParticles();
+
+    drawWater(); drawShoreline(); drawObstacles(); drawStones();
+    drawBoat(boat.x, BOAT_SCREEN_Y, clamp(windStrength * 0.18, -0.3, 0.3));
+    drawHUD();
+
+    if (boat.distance >= TOTAL_DISTANCE) {
+      state = GameState.SHORE; enterEndingScroll(); startEndingMusic(); playShoreStinger();
+    }
+
+  } else if (state === GameState.SHORE) {
+    drawWater(); updateShimmer(); drawShimmer(); drawPineSkyline();
+    updateReadScroll();
+    drawScrollLines(scrollLines, readDistance);
+    drawBoat(SCREEN_W / 2, READING_BOAT_Y, 0);
+    if (readDistance > scrollLength) returnToTitle();
+
+    ctx.fillStyle = PAL.ink; ctx.font = "11px Georgia"; ctx.textAlign = "left";
+    ctx.fillText("SPACE skip", 8, SCREEN_H - 8);
+
+    if (actionJustPressed()) returnToTitle();
+
+  } else if (state === GameState.COLD) {
+    drawColdEnding();
+    if (actionJustPressed()) returnToTitle();
+  }
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>

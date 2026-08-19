@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P*SS & VINEGAR!</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0e1424;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Georgia', 'Palatino Linotype', serif;
+    overflow: hidden;
+    color: #f2ead8;
+  }
+  #wrap {
+    position: relative;
+    width: 960px; height: 576px;
+    box-shadow: 0 0 0 5px #241a10, 0 0 0 9px #6b4a2a, 0 0 0 10px #8a6338,
+                0 26px 70px rgba(0,0,0,0.7);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  canvas { display: block; background: #d9b877; cursor: crosshair; }
+  #hint {
+    position: absolute; bottom: -36px; left: 0; width: 100%;
+    text-align: center; font-size: 12px; color: #9a8f78; letter-spacing: 0.6px;
+  }
+  #hint b { color: #e8b23c; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="576"></canvas>
+</div>
+<div id="hint">MOUSE AIMS &nbsp;&middot;&nbsp; <b>WASD</b> / ARROWS MOVE &nbsp;&middot;&nbsp; <b>SPACE</b> THROWS VINEGAR &nbsp;&middot;&nbsp; &uarr;&darr; / WHEEL SCROLL TEXT &nbsp;&middot;&nbsp; SOUND <b>M</b></div>
+<script>
+"use strict";
+
+/* ============================================================
+   P*SS & VINEGAR! (formerly "14 HOURS: THE CATLEY SIEGE")
+   Fifth of five SOUTH FORK SATURDAYS Playdate games reskinned into
+   a standalone HTML/Canvas build, in MAILTO!'s hand-drawn style.
+
+   Built fresh from the Playdate Lua source (source/main.lua, v0.13) —
+   every constant, formula, and panel of title/ending text below is
+   ported 1:1 from that hardware-tuned source. An older, now-superseded
+   browser build of this game existed before the Playdate port and is
+   NOT the basis for this file — it still framed the story as the 1877
+   Nez Perce War, which the Lua source corrected (v0.12) to the actual
+   1879 Sheepeater War / Vinegar Hill engagement.
+
+   The one necessary substitution: on Playdate, the crank turns the
+   soldier's facing/aim like a compass dial while the D-pad still
+   handles movement — two independent inputs at once. There's no crank
+   in a browser. Facing here is driven by the mouse instead: your
+   soldier's aim points from their position toward the cursor,
+   continuously, the same "always has a heading" quality the crank
+   dial gave the Lua version. Movement stays on WASD/arrows. Title and
+   credits screens (which used the crank for scrolling, not aiming)
+   use the same thrust/drag scroll substitution CLAIMJUMPER! and
+   TAILINGS! used: Up/Down, W/S, or the mouse wheel.
+   Self-contained vanilla JS + Canvas. No dependencies.
+   ============================================================ */
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// Logic space matches the Playdate build exactly (400x240, 1:1 with the
+// device screen). DRAW_SCALE upsamples that into smooth painted linework
+// instead of nearest-neighbor pixel scaling — same 2.4 used by THE
+// FATHOMING!, CLAIMJUMPER!, and TAILINGS!, all fresh from-Playdate-spec
+// ports with no browser predecessor worth preserving at a different scale.
+const DRAW_SCALE = 2.4;
+const LW = 400, LH = 240;
+const W = cv.width, H = cv.height; // 960 x 576
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// ---------------------------------------------------------------
+// input
+let keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyA','KeyS','KeyD','Enter'].includes(e.code)) e.preventDefault();
+  initAudio();
+  if (e.code === 'KeyM') soundOn = !soundOn;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+let mouseX = LW * DRAW_SCALE / 2, mouseY = LH * DRAW_SCALE / 2;
+cv.addEventListener('mousemove', e => {
+  const r = cv.getBoundingClientRect();
+  mouseX = (e.clientX - r.left) * (cv.width / r.width);
+  mouseY = (e.clientY - r.top) * (cv.height / r.height);
+});
+cv.addEventListener('mousedown', () => { initAudio(); mouseDown = true; });
+window.addEventListener('mouseup', () => { mouseDown = false; });
+let mouseDown = false, prevMouseDown = false, mouseJustPressed = false;
+
+let wheelDelta = 0;
+cv.addEventListener('wheel', e => { wheelDelta += e.deltaY * 0.5; e.preventDefault(); }, { passive: false });
+
+function leftHeld()  { return !!(keys['ArrowLeft']  || keys['KeyA']); }
+function rightHeld() { return !!(keys['ArrowRight'] || keys['KeyD']); }
+function upHeld()    { return !!(keys['ArrowUp']    || keys['KeyW']); }
+function downHeld()  { return !!(keys['ArrowDown']  || keys['KeyS']); }
+
+let prevSpace = false, spaceJustPressed = false;
+let prevEnter = false, enterJustPressed = false;
+function pollEdges() {
+  const sp = !!keys['Space'];
+  spaceJustPressed = sp && !prevSpace;
+  prevSpace = sp;
+  const en = !!keys['Enter'];
+  enterJustPressed = en && !prevEnter;
+  prevEnter = en;
+  mouseJustPressed = mouseDown && !prevMouseDown;
+  prevMouseDown = mouseDown;
+}
+function confirmPressed() { return spaceJustPressed || enterJustPressed || mouseJustPressed; }
+
+// ---------------------------------------------------------------
+// audio — WebAudio synth helpers, no samples, no dependencies.
+let actx = null, soundOn = true;
+function initAudio() { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } }
+function tone(freq, dur, type, gain, when) {
+  if (!actx || !soundOn) return;
+  const t = (when !== undefined) ? when : actx.currentTime;
+  const o = actx.createOscillator(); const g = actx.createGain();
+  o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(gain, 0.001), t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(actx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+let noiseBuf = null;
+function getNoiseBuffer() {
+  if (noiseBuf || !actx) return noiseBuf;
+  const n = actx.sampleRate * 0.3;
+  noiseBuf = actx.createBuffer(1, n, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  return noiseBuf;
+}
+function noiseHit(dur, gain, hp) {
+  if (!actx || !soundOn) return;
+  const buf = getNoiseBuffer(); if (!buf) return;
+  const t = actx.currentTime;
+  const src = actx.createBufferSource(); src.buffer = buf;
+  const g = actx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  let node = src;
+  if (hp) { const f = actx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp; node.connect(f); node = f; }
+  node.connect(g); g.connect(actx.destination);
+  src.start(t); src.stop(t + dur + 0.02);
+}
+
+// noteFreq(): MIDI note number -> Hz, matching the Lua source's own
+// noteFreq() exactly — every SFX and music-step frequency below is a
+// MIDI number, ported verbatim, not re-picked.
+function noteFreq(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
+
+// SFX — ported directly from the Lua's inline playNote() calls: same
+// MIDI notes, durations, and gains, WebAudio gain standing in for the
+// SDK synth volume parameter.
+function sfxReassign()   { tone(noteFreq(50), 0.18, 'sawtooth', 0.45); }
+function sfxDouse()      { tone(noteFreq(81), 0.06, 'sawtooth', 0.42); }
+function sfxNewHour()    { tone(noteFreq(93), 0.08, 'sawtooth', 0.30); }
+function sfxDeflected()  { tone(noteFreq(64), 0.05, 'sawtooth', 0.34); }
+function sfxBlindHit()   { tone(noteFreq(33), 0.14, 'sawtooth', 0.60); noiseHit(0.10, 0.18, 180); }
+function sfxWin()        { tone(noteFreq(69), 0.30, 'square', 0.50); tone(noteFreq(57), 0.50, 'triangle', 0.42, actx ? actx.currentTime + 0.05 : undefined); }
+function sfxLose()       { tone(noteFreq(40), 0.70, 'triangle', 0.48); }
+
+// music: two step-sequenced loops, ported note-for-note from the Lua's
+// LEAD_STEPS/BASS_STEPS (title, A minor, square+triangle) and
+// CREDITS_LEAD_STEPS/CREDITS_BASS_STEPS (credits/ending, C major,
+// triangle+sine, slower and resolved). Gameplay stays silent — SFX
+// only, no looping music under play, matching the Lua's own stated
+// principle (same one THE FATHOMING! used).
+const MUS_TITLE = {
+  rate: 9, durMul: 0.85, leadWave: 'square', bassWave: 'triangle',
+  lead: [57,0,60,57,0,64,60,0,57,0,60,64,68,64,60,57],
+  bass: [45,0,0,45,48,0,0,48,45,0,0,45,43,0,0,43],
+  leadGain: 0.16, bassGain: 0.15,
+};
+const MUS_CREDITS = {
+  rate: 17, durMul: 0.85, leadWave: 'triangle', bassWave: 'sine',
+  lead: [60,0,64,67,0,64,60,0],
+  bass: [48,0,0,48,45,0,0,45],
+  leadGain: 0.15, bassGain: 0.14,
+};
+let MUS = { track: null, step: 0, timer: 0 };
+function musicSet(track) { if (MUS.track !== track) { MUS.track = track; MUS.step = 0; MUS.timer = 0; } }
+function musicTick() {
+  if (!MUS.track || !soundOn || !actx) return;
+  MUS.timer -= 1;
+  if (MUS.timer > 0) return;
+  MUS.timer = MUS.track.rate;
+  const t = MUS.track;
+  const ln = t.lead[MUS.step % t.lead.length];
+  const bn = t.bass[MUS.step % t.bass.length];
+  const stepLen = (t.rate / 30) * t.durMul;
+  if (ln) tone(noteFreq(ln), stepLen, t.leadWave, t.leadGain);
+  if (bn) tone(noteFreq(bn), stepLen, t.bassWave, t.bassGain);
+  MUS.step++;
+}
+
+// ---------------------------------------------------------------
+// palette — MAILTO!'s warm earthy hex family (browns/tans/golds).
+// No shadeColor(hex,%) helper anywhere here, per MAILTO!'s own source
+// — volume comes from rgba highlight/shadow facets and gradients laid
+// directly over flat fills. Vinegar Hill is a dry ridge with no water,
+// so the palette stays fully in this warm/dusty register rather than
+// cooling toward TAILINGS!'s snow whites.
+const PAL = {
+  ink: '#2b1d10', cream: '#f2ead8', gold: '#e8b23c', gold2: '#e8d24a',
+  dustDk: '#3a2a1c', dustMd: '#6b4a2a', dustLt: '#8a6338', dustPale: '#c9a876',
+  sage: '#7d8a5c', sageDk: '#5c6640',
+  skyTop: '#d9b877', skyLow: '#c9915a',
+  blood: '#7a2418',
+};
+
+// ---------------------------------------------------------------
+// text helpers (Georgia serif throughout; real bold + emboss for
+// headline text — the browser's actual bold weight, replacing the
+// Lua's faked-bold stacked-offset hack, since that workaround only
+// existed because Playdate's system font has no true bold).
+function ctextAt(s, x, y, opt) {
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = (opt && opt.font) || '13px Georgia';
+  ctx.fillStyle = (opt && opt.color) || PAL.ink;
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function embossCText(s, cx, y, size) {
+  size = size || 30;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `bold ${size}px Georgia`;
+  ctx.fillStyle = 'rgba(30,18,8,0.45)';
+  ctx.fillText(s, cx + 1.2, y + 1.6);
+  ctx.fillStyle = PAL.ink;
+  ctx.fillText(s, cx, y);
+  ctx.lineWidth = 0.7; ctx.strokeStyle = 'rgba(232,178,60,0.55)';
+  ctx.strokeText(s, cx, y);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------
+// constants — ported verbatim from the Lua source (main.lua v0.13).
+// Do not re-derive these; they are the hardware-tuned reference this
+// build exists to preserve.
+const PLATEAU = { cx: 200, cy: 118, rx: 168, ry: 92 };
+const HOUR_SEC = 18;
+const TOTAL_HOURS = 14;
+const PLAYER_SPEED = 92;          // px/sec, logic space
+const FODDER_BASE_SPEED = 20;     // px/sec, logic space
+const SNIPER_FLEE_R = 22;
+const HIT_RADIUS = 16;
+const CONE_HALF = 56 * Math.PI / 180; // 112 deg total facing cone
+const AWARE_RING_R = 40;
+const VINEGAR_RANGE = 130;
+const VINEGAR_PER_HOUR = 3;
+const DT = 1 / 30;
+
+const UNIT_TYPES = [
+  { name: 'horse', hp: 500, count: 8 },
+  { name: 'mule',  hp: 250, count: 16 },
+  { name: 'pig',   hp: 125, count: 24 },
+];
+const COMPANY_TOTAL = 48;
+
+// ===== state =====
+let gameState = 'title'; // title | playing | win | lose | credits
+let units = [], playerUnitId = null;
+let hour = 1, hourTimer = HOUR_SEC, vinegarCharges = VINEGAR_PER_HOUR;
+let facingAngle = -Math.PI / 2;
+let shakeX = 0, shakeY = 0;
+let flashTimer = 0;
+let currentTension = 0;
+let hitFlashes = [], dousedFlashes = [];
+let msgText = '', msgTimer = 0;
+let lastSniperSpawn = 0;
+let elapsedSec = 0;
+let snipers = [];
+let embers = [];
+
+// ===== helpers =====
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return Math.abs(d);
+}
+function clampToPlateau(pos, radius) {
+  const rx = Math.max(8, PLATEAU.rx - (radius || 6));
+  const ry = Math.max(8, PLATEAU.ry - (radius || 6));
+  const dx = (pos.x - PLATEAU.cx) / rx;
+  const dy = (pos.y - PLATEAU.cy) / ry;
+  const d2 = dx * dx + dy * dy;
+  if (d2 > 1) {
+    const d = Math.sqrt(d2);
+    pos.x = PLATEAU.cx + (dx / d) * rx;
+    pos.y = PLATEAU.cy + (dy / d) * ry;
+  }
+}
+function randomPointInPlateau(marginFrac) {
+  const m = marginFrac || 0;
+  const ang = Math.random() * Math.PI * 2;
+  const d = Math.sqrt(Math.random()) * (1 - m);
+  return { x: PLATEAU.cx + Math.cos(ang) * PLATEAU.rx * d, y: PLATEAU.cy + Math.sin(ang) * PLATEAU.ry * d };
+}
+function randomEdgePoint() {
+  const side = 1 + Math.floor(Math.random() * 4);
+  if (side === 1) return { x: Math.random() * LW, y: -10 };
+  if (side === 2) return { x: Math.random() * LW, y: LH + 10 };
+  if (side === 3) return { x: -10, y: Math.random() * LH };
+  return { x: LW + 10, y: Math.random() * LH };
+}
+function hourMultiplier() {
+  if (hour >= 13) return 1.6;
+  if (hour >= 11) return 1.25;
+  if (hour >= 8) return 1.1;
+  return 1;
+}
+function showMessage(text) { msgText = text; msgTimer = 0.85; }
+
+function drawDashedLine(x1, y1, x2, y2, dash, gap) {
+  dash = dash || 4; gap = gap || 4;
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.01) return;
+  const ux = dx / len, uy = dy / len;
+  let pos = 0, drawing = true;
+  ctx.beginPath();
+  while (pos < len) {
+    const step = drawing ? dash : gap;
+    const nextPos = Math.min(len, pos + step);
+    if (drawing) { ctx.moveTo(x1 + ux * pos, y1 + uy * pos); ctx.lineTo(x1 + ux * nextPos, y1 + uy * nextPos); }
+    pos = nextPos; drawing = !drawing;
+  }
+  ctx.stroke();
+}
+
+// ===== units / company =====
+function aliveUnits() { return units.filter(u => u.alive); }
+function getPlayerUnit() { return units.find(u => u.id === playerUnitId) || null; }
+
+function reassignPlayer() {
+  const pool = aliveUnits();
+  if (pool.length === 0) return false;
+  const next = pool[Math.floor(Math.random() * pool.length)];
+  playerUnitId = next.id;
+  showMessage('YOU ARE NOW A ' + next.type.toUpperCase() + ' SOLDIER');
+  sfxReassign();
+  return true;
+}
+function damageUnit(u, amount) {
+  if (!u.alive) return;
+  if (u.mountHP > 0) u.mountHP = Math.max(0, u.mountHP - amount);
+  else u.soldierHP = Math.max(0, u.soldierHP - amount);
+  if (u.mountHP <= 0 && u.soldierHP <= 0) {
+    u.alive = false;
+    hitFlashes.push({ x: u.x, y: u.y, t: 0, deflected: false });
+    if (u.id === playerUnitId) reassignPlayer();
+  }
+}
+function makeUnits() {
+  const arr = []; let id = 0;
+  for (const t of UNIT_TYPES) {
+    for (let i = 0; i < t.count; i++) {
+      const p = randomPointInPlateau(0.15);
+      arr.push({
+        id: id, type: t.name, mountHP: t.hp, mountMax: t.hp, soldierHP: 100, alive: true,
+        x: p.x, y: p.y, wanderTarget: randomPointInPlateau(0.15), wanderTimer: 1 + Math.random() * 2,
+        speedFactor: 0.6 + Math.random() * 0.8,
+      });
+      id++;
+    }
+  }
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// ===== setup =====
+function resetGame() {
+  units = makeUnits();
+  playerUnitId = units[Math.floor(Math.random() * units.length)].id;
+  snipers = [];
+  hour = 1; hourTimer = HOUR_SEC; vinegarCharges = VINEGAR_PER_HOUR;
+  hitFlashes = []; dousedFlashes = []; embers = [];
+  lastSniperSpawn = 0; elapsedSec = 0;
+  facingAngle = -Math.PI / 2;
+  flashTimer = 0; currentTension = 0; shakeX = 0; shakeY = 0;
+}
+
+function spawnSniper() {
+  let cap;
+  if (hour <= 3) cap = 2;
+  else if (hour <= 7) cap = 3;
+  else if (hour <= 12) cap = 4;
+  else cap = 6;
+
+  let activeCount = 0;
+  for (const s of snipers) if (s.phase !== 'fired' && s.phase !== 'doused') activeCount++;
+  if (activeCount >= cap) return;
+
+  const pool = aliveUnits();
+  if (pool.length === 0) return;
+  const playerU = getPlayerUnit();
+  let targetUnit;
+  if (playerU && Math.random() < 0.45) targetUnit = playerU;
+  else targetUnit = pool[Math.floor(Math.random() * pool.length)];
+
+  const edge = randomEdgePoint();
+  const dmgFull = (22 + hour * 1.9) * hourMultiplier();
+  const dmgDeflected = dmgFull * 0.45;
+  snipers.push({
+    edge, targetId: targetUnit.id,
+    trackTime: Math.max(0.85, 1.7 - hour * 0.05) + Math.random() * 0.5,
+    lockTime: Math.max(0.35, 0.75 - hour * 0.02),
+    elapsed: 0, phase: 'tracking', lockX: 0, lockY: 0,
+    liveX: targetUnit.x, liveY: targetUnit.y, stunned: false,
+    dmgFull, dmgDeflected,
+  });
+}
+
+function throwVinegar() {
+  const player = getPlayerUnit();
+  if (!player) return;
+  if (vinegarCharges <= 0) { showMessage('NO VINEGAR LEFT THIS HOUR'); return; }
+  let best = null, bestD = Infinity, bx = 0, by = 0;
+  for (const s of snipers) {
+    if ((s.phase === 'tracking' || s.phase === 'locked') && !s.stunned) {
+      const px = (s.phase === 'locked') ? s.lockX : s.liveX;
+      const py = (s.phase === 'locked') ? s.lockY : s.liveY;
+      const ang = Math.atan2(py - player.y, px - player.x);
+      const d = Math.sqrt((px - player.x) ** 2 + (py - player.y) ** 2);
+      if (angleDiff(ang, facingAngle) <= CONE_HALF && d <= VINEGAR_RANGE && d < bestD) {
+        bestD = d; best = s; bx = px; by = py;
+      }
+    }
+  }
+  if (!best) { showMessage('NOTHING IN YOUR SIGHT LINE'); return; }
+  vinegarCharges--;
+  best.stunned = true; best.phase = 'doused'; best.elapsed = 0;
+  dousedFlashes.push({ x: bx, y: by, t: 0 });
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 20 + Math.random() * 40;
+    embers.push({ x: bx, y: by, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.35 + Math.random() * 0.2, gold: true });
+  }
+  showMessage('SNIPER DOUSED!');
+  sfxDouse();
+}
+
+function startNewHour() {
+  hour++; hourTimer = HOUR_SEC; vinegarCharges = VINEGAR_PER_HOUR;
+  sfxNewHour();
+}
+
+// ===== update pieces =====
+function updatePlayerMovement() {
+  const p = getPlayerUnit();
+  if (!p || !p.alive) return;
+  let dx = 0, dy = 0;
+  if (upHeld()) dy -= 1;
+  if (downHeld()) dy += 1;
+  if (leftHeld()) dx -= 1;
+  if (rightHeld()) dx += 1;
+  if (dx !== 0 || dy !== 0) {
+    const len = Math.sqrt(dx * dx + dy * dy);
+    p.x += (dx / len) * PLAYER_SPEED * DT;
+    p.y += (dy / len) * PLAYER_SPEED * DT;
+    clampToPlateau(p, 10);
+  }
+}
+function updateFacing() {
+  const p = getPlayerUnit();
+  if (!p) return;
+  const px = p.x * DRAW_SCALE, py = p.y * DRAW_SCALE;
+  facingAngle = Math.atan2(mouseY - py, mouseX - px);
+}
+function updateFodderAI() {
+  for (const u of units) {
+    if (u.alive && u.id !== playerUnitId) {
+      let fleeX = 0, fleeY = 0, fleeing = false;
+      for (const s of snipers) {
+        if (s.phase === 'locked' && !s.stunned) {
+          const d = Math.sqrt((u.x - s.lockX) ** 2 + (u.y - s.lockY) ** 2);
+          if (d < SNIPER_FLEE_R) { fleeX += (u.x - s.lockX); fleeY += (u.y - s.lockY); fleeing = true; }
+        }
+      }
+      let vx, vy;
+      if (fleeing) {
+        let len = Math.sqrt(fleeX * fleeX + fleeY * fleeY); if (len < 0.01) len = 1;
+        vx = fleeX / len; vy = fleeY / len;
+      } else {
+        u.wanderTimer -= DT;
+        const dToTarget = Math.sqrt((u.wanderTarget.x - u.x) ** 2 + (u.wanderTarget.y - u.y) ** 2);
+        if (u.wanderTimer <= 0 || dToTarget < 6) {
+          u.wanderTarget = randomPointInPlateau(0.15);
+          u.wanderTimer = 1.5 + Math.random() * 2.5;
+        }
+        let len = dToTarget; if (len < 0.01) len = 1;
+        vx = (u.wanderTarget.x - u.x) / len; vy = (u.wanderTarget.y - u.y) / len;
+      }
+      const speed = FODDER_BASE_SPEED * u.speedFactor * (fleeing ? 1.4 : 1);
+      u.x += vx * speed * DT; u.y += vy * speed * DT;
+      clampToPlateau(u, 5);
+    }
+  }
+}
+function updateSnipers() {
+  for (const s of snipers) {
+    s.elapsed += DT;
+    if (s.phase === 'tracking') {
+      let t = units.find(u => u.id === s.targetId);
+      if (!t || !t.alive) {
+        const pool = aliveUnits();
+        if (pool.length > 0) { t = pool[Math.floor(Math.random() * pool.length)]; s.targetId = t.id; }
+      }
+      if (t) { s.liveX = t.x; s.liveY = t.y; }
+      if (s.elapsed >= s.trackTime) {
+        s.phase = 'locked';
+        s.lockX = (s.liveX !== undefined) ? s.liveX : s.edge.x;
+        s.lockY = (s.liveY !== undefined) ? s.liveY : s.edge.y;
+        s.elapsed = 0;
+      }
+    } else if (s.phase === 'locked') {
+      if (s.elapsed >= s.lockTime) {
+        s.phase = 'fired';
+        if (!s.stunned) {
+          let victim = null, bestD = HIT_RADIUS;
+          for (const u of aliveUnits()) {
+            const d = Math.sqrt((u.x - s.lockX) ** 2 + (u.y - s.lockY) ** 2);
+            if (d < bestD) { bestD = d; victim = u; }
+          }
+          if (victim) {
+            if (victim.id === playerUnitId) {
+              const angToSrc = Math.atan2(s.lockY - victim.y, s.lockX - victim.x);
+              const facingIt = angleDiff(angToSrc, facingAngle) <= CONE_HALF;
+              if (facingIt) {
+                damageUnit(victim, s.dmgDeflected);
+                showMessage('DEFLECTED - YOU SAW IT COMING');
+                sfxDeflected();
+              } else {
+                damageUnit(victim, s.dmgFull);
+                showMessage('HIT FROM YOUR BLIND SIDE');
+                flashTimer = 0.09;
+                sfxBlindHit();
+              }
+            } else {
+              damageUnit(victim, s.dmgFull);
+            }
+          }
+        }
+      }
+    }
+  }
+  snipers = snipers.filter(s => {
+    if (s.phase === 'fired') return s.elapsed < s.lockTime + 0.25;
+    if (s.phase === 'doused') return s.elapsed < 0.4;
+    return true;
+  });
+}
+function updateFlashes() {
+  dousedFlashes = dousedFlashes.filter(f => { f.t += DT; return f.t < 0.4; });
+  hitFlashes = hitFlashes.filter(f => { f.t += DT; return f.t < 0.35; });
+  embers = embers.filter(e => { e.t += DT; e.x += e.vx * DT; e.y += e.vy * DT; e.vx *= 0.94; e.vy *= 0.94; return e.t < e.life; });
+}
+
+function updatePlaying() {
+  updateFacing();
+  updatePlayerMovement();
+  updateFodderAI();
+
+  if (spaceJustPressed || mouseJustPressed) throwVinegar();
+
+  elapsedSec += DT;
+  hourTimer -= DT;
+  if (hourTimer <= 0) {
+    if (hour >= TOTAL_HOURS) {
+      gameState = 'win';
+      sfxWin();
+      return;
+    }
+    startNewHour();
+  }
+
+  const gap = Math.max(0.55, (2.4 - hour * 0.09) / hourMultiplier());
+  if (elapsedSec - lastSniperSpawn > gap) { spawnSniper(); lastSniperSpawn = elapsedSec; }
+
+  updateSnipers();
+  updateFlashes();
+
+  if (msgTimer > 0) msgTimer -= DT;
+  if (flashTimer > 0) flashTimer -= DT;
+
+  const alive = aliveUnits().length;
+  if (alive === 0) { gameState = 'lose'; sfxLose(); return; }
+
+  currentTension = Math.min(1, (1 - alive / COMPANY_TOTAL) * 0.5 + ((hour >= 11) ? 0.35 : 0));
+  const shakeMag = currentTension * 3;
+  shakeX = (Math.random() * 2 - 1) * shakeMag;
+  shakeY = (Math.random() * 2 - 1) * shakeMag;
+}
+
+// ===== drawing: gameplay =====
+function drawVignetteBackground() {
+  // Drawn BEFORE the plateau/units/player, not after — porting v0.9's
+  // fix directly. The wash lays down first and every later draw call
+  // simply overwrites it wherever it has something to paint, so it can
+  // never erase gameplay detail regardless of tension. Repainted here as
+  // a soft dusty-red radial gradient plus a fine grain scatter rather
+  // than a literal 1-bit dither, since canvas alpha reads better at
+  // DRAW_SCALE than a hard Bayer pattern would.
+  if (currentTension < 0.06) return;
+  const alpha = Math.min(0.85, currentTension * 0.9);
+  const g = ctx.createRadialGradient(LW / 2, LH / 2, LH * 0.12, LW / 2, LH / 2, LH * 0.78);
+  g.addColorStop(0, 'rgba(58,26,14,0)');
+  g.addColorStop(0.55, `rgba(74,28,18,${(alpha * 0.4).toFixed(3)})`);
+  g.addColorStop(1, `rgba(28,12,8,${alpha.toFixed(3)})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, LW, LH);
+  ctx.fillStyle = `rgba(20,10,5,${(currentTension * 0.14).toFixed(3)})`;
+  const grains = Math.floor(currentTension * 50);
+  for (let i = 0; i < grains; i++) {
+    const gx = (i * 59) % LW, gy = (i * 97 + i * i * 7) % LH;
+    ctx.fillRect(gx, gy, 1, 1);
+  }
+}
+
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, LH);
+  g.addColorStop(0, PAL.skyTop);
+  g.addColorStop(1, PAL.skyLow);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, LW, LH);
+}
+
+function drawPlateau() {
+  const g = ctx.createRadialGradient(PLATEAU.cx - 30, PLATEAU.cy - 22, 8, PLATEAU.cx, PLATEAU.cy, PLATEAU.rx);
+  g.addColorStop(0, PAL.dustPale);
+  g.addColorStop(0.6, PAL.dustLt);
+  g.addColorStop(1, PAL.dustDk);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(PLATEAU.cx, PLATEAU.cy, PLATEAU.rx, PLATEAU.ry, 0, 0, Math.PI * 2); ctx.fill();
+  // highlight/shadow facets — rgba overlays, no shadeColor(hex,%) helper
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  ctx.beginPath(); ctx.ellipse(PLATEAU.cx - 24, PLATEAU.cy - 16, PLATEAU.rx * 0.5, PLATEAU.ry * 0.42, -0.3, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.beginPath(); ctx.ellipse(PLATEAU.cx + 28, PLATEAU.cy + 20, PLATEAU.rx * 0.58, PLATEAU.ry * 0.48, 0.3, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.ellipse(PLATEAU.cx, PLATEAU.cy, PLATEAU.rx, PLATEAU.ry, 0, 0, Math.PI * 2); ctx.stroke();
+}
+
+function drawFacingCone(p) {
+  const r = AWARE_RING_R + 30, steps = 10;
+  ctx.beginPath(); ctx.moveTo(p.x, p.y);
+  for (let i = 0; i <= steps; i++) {
+    const a = (facingAngle - CONE_HALF) + (2 * CONE_HALF) * (i / steps);
+    ctx.lineTo(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(232,178,60,0.16)';
+  ctx.fill();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x + Math.cos(facingAngle - CONE_HALF) * r, p.y + Math.sin(facingAngle - CONE_HALF) * r); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x + Math.cos(facingAngle + CONE_HALF) * r, p.y + Math.sin(facingAngle + CONE_HALF) * r); ctx.stroke();
+}
+
+function drawAwarenessRing(p) {
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(p.x, p.y, AWARE_RING_R, 0, Math.PI * 2); ctx.stroke();
+  for (const s of snipers) {
+    if (s.phase === 'tracking' || s.phase === 'locked') {
+      const tx = (s.phase === 'locked') ? s.lockX : s.liveX;
+      const ty = (s.phase === 'locked') ? s.lockY : s.liveY;
+      const ang = Math.atan2(ty - p.y, tx - p.x);
+      const inCone = angleDiff(ang, facingAngle) <= CONE_HALF;
+      const dotX = p.x + Math.cos(ang) * AWARE_RING_R;
+      const dotY = p.y + Math.sin(ang) * AWARE_RING_R;
+      if (inCone) {
+        ctx.fillStyle = PAL.ink;
+        ctx.beginPath(); ctx.arc(dotX, dotY, (s.phase === 'locked') ? 3 : 2, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.strokeStyle = PAL.ink;
+        ctx.beginPath(); ctx.arc(dotX, dotY, 2, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawSniperDetail(p) {
+  for (const s of snipers) {
+    const tx = (s.phase === 'locked') ? s.lockX : s.liveX;
+    const ty = (s.phase === 'locked') ? s.lockY : s.liveY;
+    const ang = Math.atan2(ty - p.y, tx - p.x);
+    const inCone = angleDiff(ang, facingAngle) <= CONE_HALF;
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+    if (s.phase === 'tracking') {
+      if (inCone) drawDashedLine(s.edge.x, s.edge.y, tx, ty, 4, 4);
+    } else if (s.phase === 'locked') {
+      const prog = s.elapsed / s.lockTime;
+      const ringR = 18 * (1 - prog) + 5;
+      if (inCone) {
+        drawDashedLine(s.edge.x, s.edge.y, s.lockX, s.lockY, 3, 3);
+        ctx.beginPath(); ctx.arc(s.lockX, s.lockY, ringR, 0, Math.PI * 2); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.arc(s.edge.x, s.edge.y, 2, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawUnitShape(u, isPlayer) {
+  const dismounted = u.mountHP <= 0;
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = isPlayer ? 1.3 : 1;
+  const fillGrad = (r) => {
+    const g = ctx.createRadialGradient(u.x - r * 0.4, u.y - r * 0.4, r * 0.2, u.x, u.y, r * 1.3);
+    g.addColorStop(0, PAL.dustPale); g.addColorStop(1, PAL.dustMd);
+    return g;
+  };
+  if (u.type === 'horse') {
+    const sz = isPlayer ? 6 : 4;
+    ctx.fillStyle = fillGrad(sz);
+    ctx.beginPath();
+    ctx.moveTo(u.x, u.y - sz); ctx.lineTo(u.x + sz * 0.85, u.y + sz * 0.7); ctx.lineTo(u.x - sz * 0.85, u.y + sz * 0.7);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u.x, u.y - sz); ctx.lineTo(u.x, u.y - sz - sz * 0.55); ctx.stroke();
+  } else if (u.type === 'mule') {
+    const sz = isPlayer ? 5 : 3.4;
+    ctx.fillStyle = fillGrad(sz);
+    ctx.fillRect(u.x - sz / 2, u.y - sz / 2, sz, sz);
+    ctx.strokeRect(u.x - sz / 2, u.y - sz / 2, sz, sz);
+    ctx.beginPath(); ctx.moveTo(u.x - sz * 0.3, u.y - sz / 2); ctx.lineTo(u.x - sz * 0.55, u.y - sz * 1.1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u.x + sz * 0.3, u.y - sz / 2); ctx.lineTo(u.x + sz * 0.55, u.y - sz * 1.1); ctx.stroke();
+  } else {
+    const r = isPlayer ? 4 : 2.6;
+    ctx.fillStyle = fillGrad(r);
+    ctx.beginPath(); ctx.arc(u.x, u.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = PAL.ink;
+    ctx.beginPath(); ctx.arc(u.x + r * 0.6, u.y + r * 0.3, 0.8, 0, Math.PI * 2); ctx.fill();
+  }
+  if (dismounted) {
+    const m = (isPlayer ? 6 : 4) * 0.9;
+    ctx.strokeStyle = PAL.blood; ctx.lineWidth = 1.1;
+    ctx.beginPath(); ctx.moveTo(u.x - m, u.y - m); ctx.lineTo(u.x + m, u.y + m); ctx.stroke();
+  }
+}
+function drawUnits() { for (const u of units) if (u.alive && u.id !== playerUnitId) drawUnitShape(u, false); }
+function drawPlayer(p) {
+  drawUnitShape(p, true);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(p.x + Math.cos(facingAngle) * 9, p.y + Math.sin(facingAngle) * 9);
+  ctx.lineTo(p.x + Math.cos(facingAngle) * 20, p.y + Math.sin(facingAngle) * 20);
+  ctx.stroke();
+}
+
+function drawFlashesFx() {
+  for (const f of dousedFlashes) {
+    const r = 8 + f.t * 55;
+    ctx.strokeStyle = PAL.gold; ctx.lineWidth = 1.5; ctx.globalAlpha = Math.max(0, 1 - f.t / 0.4);
+    ctx.beginPath(); ctx.arc(f.x, f.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  for (const f of hitFlashes) {
+    const r = 10 + f.t * 40;
+    ctx.strokeStyle = PAL.blood; ctx.lineWidth = 1.5; ctx.globalAlpha = Math.max(0, 1 - f.t / 0.35);
+    ctx.beginPath(); ctx.arc(f.x, f.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  for (const e of embers) {
+    ctx.globalAlpha = Math.max(0, 1 - e.t / e.life);
+    ctx.fillStyle = e.gold ? PAL.gold2 : PAL.blood;
+    ctx.fillRect(e.x - 0.8, e.y - 0.8, 1.6, 1.6);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawFlash() {
+  if (flashTimer > 0) { ctx.fillStyle = PAL.ink; ctx.fillRect(0, 0, LW, LH); }
+}
+
+function drawHud(p) {
+  ctx.font = '13px Georgia'; ctx.fillStyle = PAL.ink;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('HOUR ' + Math.min(hour, TOTAL_HOURS) + '/' + TOTAL_HOURS, 6, 15);
+  const alive = aliveUnits().length;
+  ctx.textAlign = 'right';
+  ctx.fillText('CO ' + alive + '/' + COMPANY_TOTAL, LW - 6, 15);
+  ctx.textAlign = 'left';
+
+  if (p) {
+    const mf = p.mountHP / p.mountMax, sf = p.soldierHP / 100;
+    ctx.fillText('M', 6, LH - 22);
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1; ctx.strokeRect(20, LH - 27, 60, 6);
+    ctx.fillStyle = PAL.dustLt; ctx.fillRect(20, LH - 27, 60 * Math.max(0, mf), 6);
+    ctx.fillStyle = PAL.ink;
+    ctx.fillText('S', 6, LH - 12);
+    ctx.strokeRect(20, LH - 17, 60, 6);
+    ctx.fillStyle = PAL.blood; ctx.fillRect(20, LH - 17, 60 * Math.max(0, sf), 6);
+    ctx.fillStyle = PAL.ink;
+  }
+
+  const vinText = (vinegarCharges > 0) ? ('VIN ' + vinegarCharges + ' [SPACE]') : 'VIN SPENT';
+  ctx.textAlign = 'right';
+  ctx.fillText(vinText, LW - 6, LH - 12);
+  ctx.textAlign = 'center';
+
+  if (msgTimer > 0) {
+    const w = ctx.measureText(msgText).width;
+    ctx.fillStyle = 'rgba(242,234,216,0.85)';
+    ctx.fillRect(LW / 2 - w / 2 - 6, LH / 2 - 60 - 12, w + 12, 16);
+    ctx.fillStyle = PAL.ink;
+    ctx.fillText(msgText, LW / 2, LH / 2 - 60);
+  }
+  ctx.textAlign = 'left';
+}
+
+function drawEnd(won) {
+  drawSky();
+  const alive = aliveUnits().length;
+  ctx.textAlign = 'center';
+  if (won) {
+    embossCText('RELIEF ARRIVES', LW / 2, 78, 24);
+    ctextAt(alive + ' OF FORTY-EIGHT STILL BREATHING.', LW / 2, 106, { font: '13px Georgia' });
+  } else {
+    embossCText('THE HILL IS SILENT', LW / 2, 78, 24);
+    ctextAt('ALL FORTY-EIGHT DOWN, HOUR ' + hour + '.', LW / 2, 106, { font: '13px Georgia' });
+  }
+  ctextAt('PRESS SPACE TO CONTINUE', LW / 2, 148, { font: '13px Georgia', color: PAL.dustDk });
+  ctx.textAlign = 'left';
+}
+
+// ===== title/credits: shared scroll + ridge backdrop =====
+const PANEL_H = LH;
+const SCROLL_THRUST = 10.0, SCROLL_DRAG = 0.10;
+function updateScrollV(sc, numPanels) {
+  let d = 0;
+  if (downHeld()) d += SCROLL_THRUST;
+  if (upHeld()) d -= SCROLL_THRUST;
+  d += wheelDelta; wheelDelta = 0;
+  sc.vel = (sc.vel + d) * (1 - SCROLL_DRAG);
+  sc.pos += sc.vel;
+  const maxScroll = (numPanels - 1) * PANEL_H;
+  if (sc.pos < 0) { sc.pos = 0; sc.vel = 0; }
+  else if (sc.pos > maxScroll) { sc.pos = maxScroll; sc.vel = 0; }
+}
+
+// Fixed, non-scrolling backdrop shared by both title and credits — a
+// dithered dry ridge line (RIDGE_POINTS ported verbatim from the Lua),
+// echoing the plateau silhouette instead of borrowing another game's
+// pine-skyline/shoreline motif. Repainted here in facet/gradient style
+// per the handoff's steer, with a scatter of sparse sagebrush dots for
+// texture on this dry, waterless ridge.
+const RIDGE_POINTS = [0,150, 60,128, 120,142, 170,110, 230,130, 290,105, 340,124, 400,112];
+function drawRidgeBackground() {
+  drawSky();
+  const g = ctx.createLinearGradient(0, 95, 0, LH);
+  g.addColorStop(0, PAL.dustLt); g.addColorStop(1, PAL.dustDk);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(RIDGE_POINTS[0], RIDGE_POINTS[1]);
+  for (let i = 2; i < RIDGE_POINTS.length; i += 2) ctx.lineTo(RIDGE_POINTS[i], RIDGE_POINTS[i + 1]);
+  ctx.lineTo(LW, LH); ctx.lineTo(0, LH); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(RIDGE_POINTS[0], RIDGE_POINTS[1]);
+  for (let i = 2; i < RIDGE_POINTS.length; i += 2) ctx.lineTo(RIDGE_POINTS[i], RIDGE_POINTS[i + 1]);
+  ctx.stroke();
+  ctx.fillStyle = PAL.sageDk;
+  for (let i = 0; i < 22; i++) {
+    const rx = (i * 53 + 17) % LW;
+    const ry = 118 + ((i * 29) % (LH - 128));
+    ctx.beginPath(); ctx.arc(rx, ry, 1.3, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawLegiblePlate(lines, cx, cy) {
+  const lineH = 18;
+  ctx.font = '13px Georgia';
+  let maxW = 0;
+  for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l).width);
+  const totalH = lines.length * lineH;
+  const padX = 10, padY = 6;
+  ctx.fillStyle = 'rgba(242,234,216,0.92)';
+  ctx.fillRect(cx - maxW / 2 - padX, cy - totalH / 2 - padY, maxW + padX * 2, totalH + padY * 2);
+  ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+  ctx.strokeRect(cx - maxW / 2 - padX, cy - totalH / 2 - padY, maxW + padX * 2, totalH + padY * 2);
+  ctx.fillStyle = PAL.ink; ctx.textAlign = 'center';
+  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], cx, cy - totalH / 2 + (i + 1) * lineH - 5);
+  ctx.textAlign = 'left';
+}
+function drawSmallPrompt(text, y) {
+  ctx.font = '11px Georgia';
+  const w = ctx.measureText(text).width;
+  ctx.fillStyle = 'rgba(242,234,216,0.88)';
+  ctx.fillRect(LW / 2 - w / 2 - 6, y - 10, w + 12, 15);
+  ctx.fillStyle = PAL.ink; ctx.textAlign = 'center';
+  ctx.fillText(text, LW / 2, y + 1);
+  ctx.textAlign = 'left';
+}
+
+// ===== title sequence =====
+// Historical corrections (Lua v0.12/v0.13) reproduced verbatim below —
+// the game's original framing wrongly called this the 1877 Nez Perce
+// War. Vinegar Hill and Lt. Henry Catley belong to the 1879 Sheepeater
+// War, a separate later campaign. Panel 1's headline is updated to the
+// game's corrected title, "P*SS & VINEGAR!"; the historical text in
+// every other panel is carried over exactly. Panel 6 (controls) is
+// adapted for mouse+keyboard since there's no crank/D-pad/A button here.
+const TITLE_PANELS = [
+  ['P*SS & VINEGAR!', 'THE CATLEY SIEGE'],
+  ["1879. THE SHEEPEATER WAR.", "IDAHO'S LAST ARMED CONFLICT", "WITH ITS NATIVE PEOPLE."],
+  ['SETTLERS BLAME THE TUKUDEKA', 'FOR A STRING OF KILLINGS -', 'INCLUDING FIVE CHINESE MINERS', 'AT ORO GRANDE.', 'NO EVIDENCE IS EVER FOUND.'],
+  ['LT. HENRY CATLEY LEADS 48 MEN', 'SOUTH FROM CAMP HOWARD,', 'DOWN INTO BIG CREEK CANYON.'],
+  ['JULY 29TH. THEY ARE ATTACKED', 'ON A DRY RIDGE WITH NO WATER.', 'THE MEN SLAKE THEIR THIRST', 'ON SIPS OF VINEGAR.', 'THEY WILL CALL IT VINEGAR HILL.'],
+  ['MOUSE AIMS YOUR FACING.', 'WASD / ARROWS MOVE.', 'SPACE THROWS VINEGAR AT WHAT YOU FACE.', 'FACE A SHOT: DEFLECTED.', 'BLIND: FULL HIT.'],
+];
+let titleScroll = { pos: 0, vel: 0 };
+function drawTitleScroll() {
+  drawRidgeBackground();
+  for (let i = 0; i < TITLE_PANELS.length; i++) {
+    const panelTop = i * PANEL_H - titleScroll.pos;
+    if (panelTop < LH && panelTop + PANEL_H > 0) {
+      const cy = panelTop + PANEL_H / 2;
+      if (i === 0) {
+        embossCText(TITLE_PANELS[0][0], LW / 2, cy - 6, 27);
+        ctextAt(TITLE_PANELS[0][1], LW / 2, cy + 20, { font: '14px Georgia' });
+      } else {
+        drawLegiblePlate(TITLE_PANELS[i], LW / 2, cy);
+      }
+    }
+  }
+  if (titleScroll.pos < 10) drawSmallPrompt('SCROLL TO READ', 20);
+  drawSmallPrompt('SPACE: RIDE OUT', LH - 14);
+}
+
+// ===== credits sequence =====
+const qrImg = new Image();
+let qrReady = false, qrFailed = false;
+qrImg.onload = () => { qrReady = true; };
+qrImg.onerror = () => { qrFailed = true; };
+qrImg.src = 'data:image/png;base64,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';
+
+const CREDITS_PANELS = [
+  { kind: 'text', content: 'POST TENEBRAS LUX' },
+  { kind: 'bold', content: 'TRY. FAIL. LEARN.' },
+  { kind: 'text', content: 'LUX ESTO UMBRAS FINDENS' },
+  { kind: 'image', caption: 'ehsaturpentine.github.io/ENGINE' },
+];
+let creditsScroll = { pos: 0, vel: 0 };
+function drawCredits() {
+  drawRidgeBackground();
+  for (let i = 0; i < CREDITS_PANELS.length; i++) {
+    const panel = CREDITS_PANELS[i];
+    const panelTop = i * PANEL_H - creditsScroll.pos;
+    if (panelTop < LH && panelTop + PANEL_H > 0) {
+      const cy = panelTop + PANEL_H / 2;
+      if (panel.kind === 'image') {
+        const s = 108, pad = 6, capH = 16;
+        ctx.fillStyle = 'rgba(242,234,216,0.92)';
+        ctx.fillRect(LW / 2 - s / 2 - pad, cy - s / 2 - pad, s + pad * 2, s + pad * 2 + capH);
+        ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1;
+        ctx.strokeRect(LW / 2 - s / 2 - pad, cy - s / 2 - pad, s + pad * 2, s + pad * 2 + capH);
+        if (qrReady) ctx.drawImage(qrImg, LW / 2 - s / 2, cy - s / 2, s, s);
+        else { ctx.fillStyle = PAL.ink; ctx.textAlign = 'center'; ctx.fillText('[ IMAGE MISSING ]', LW / 2, cy); ctx.textAlign = 'left'; }
+        ctx.fillStyle = PAL.ink; ctx.textAlign = 'center';
+        ctx.fillText(panel.caption, LW / 2, cy + s / 2 + pad + 12);
+        ctx.textAlign = 'left';
+      } else if (panel.kind === 'bold') {
+        embossCText(panel.content, LW / 2, cy + 8, 20);
+      } else {
+        drawLegiblePlate([panel.content], LW / 2, cy);
+      }
+    }
+  }
+  if (creditsScroll.pos < 10) drawSmallPrompt('SCROLL TO CONTINUE', 20);
+  drawSmallPrompt('SPACE: SKIP TO TITLE', LH - 14);
+}
+
+// ===== main loop =====
+function tick() {
+  pollEdges();
+  musicTick();
+  if (gameState === 'title') {
+    musicSet(MUS_TITLE);
+    updateScrollV(titleScroll, TITLE_PANELS.length);
+    if (confirmPressed()) { resetGame(); gameState = 'playing'; }
+  } else if (gameState === 'playing') {
+    updatePlaying();
+  } else if (gameState === 'win' || gameState === 'lose') {
+    if (confirmPressed()) {
+      gameState = 'credits';
+      creditsScroll = { pos: 0, vel: 0 };
+      MUS.step = 0; MUS.timer = 0;
+    }
+  } else if (gameState === 'credits') {
+    musicSet(MUS_CREDITS);
+    updateScrollV(creditsScroll, CREDITS_PANELS.length);
+    if (confirmPressed()) {
+      gameState = 'title';
+      titleScroll = { pos: 0, vel: 0 };
+      MUS.step = 0; MUS.timer = 0;
+    }
+  }
+}
+
+function render() {
+  ctx.save();
+  ctx.setTransform(DRAW_SCALE, 0, 0, DRAW_SCALE, 0, 0);
+  ctx.clearRect(0, 0, LW, LH);
+  if (gameState === 'title') {
+    drawTitleScroll();
+  } else if (gameState === 'playing') {
+    const player = getPlayerUnit();
+    drawSky();
+    drawVignetteBackground();
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+    drawPlateau();
+    if (player) { drawFacingCone(player); drawAwarenessRing(player); drawSniperDetail(player); }
+    drawUnits();
+    drawFlashesFx();
+    if (player) drawPlayer(player);
+    ctx.restore();
+    drawFlash();
+    drawHud(player);
+  } else if (gameState === 'win') {
+    drawEnd(true);
+  } else if (gameState === 'lose') {
+    drawEnd(false);
+  } else if (gameState === 'credits') {
+    drawCredits();
+  }
+  ctx.restore();
+}
+
+let lastT = performance.now(), acc = 0;
+const STEP_MS = 1000 / 30;
+function frame(now) {
+  let delta = now - lastT; lastT = now;
+  if (delta > 250) delta = 250;
+  acc += delta;
+  let iter = 0;
+  while (acc >= STEP_MS && iter < 6) { tick(); acc -= STEP_MS; iter++; }
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

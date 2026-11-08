@@ -26,6 +26,16 @@
      visible canvas and shown only while at least one effect is active. */
   #stage    { position: relative; line-height: 0; }
   #screenGL { position: absolute; left: 0; top: 0; display: none; }
+  /* saving progress (a DOM overlay, so it never ends up inside a recorded video) */
+  #savebox { display: none; position: fixed; z-index: 20; left: 50%; top: calc(10px + env(safe-area-inset-top)); transform: translateX(-50%); width: min(92vw, 420px); box-sizing: border-box; padding: 12px 14px 14px; background: rgba(20,17,12,0.96); border: 2px solid #ffd23f; border-radius: 10px; font: 700 14px/1.3 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 1px; color: #f6f2e8; text-align: center; box-shadow: 0 0 0 3px #000; pointer-events: none; }
+  #savebox.on { display: block; }
+  #savebox .st { color: #ffd23f; font-size: 15px; }
+  #savebox .sb { font-size: 11px; color: #c9b98f; margin-top: 8px; letter-spacing: 0.5px; }
+  #savebox .bar { height: 12px; margin-top: 9px; background: #000; border: 2px solid #8a6a50; border-radius: 4px; overflow: hidden; position: relative; }
+  #savebox .fill { height: 100%; width: 0; background: #f0541e; }
+  #savebox .ind { position: absolute; top: 0; left: 0; width: 40%; height: 100%; background: #ffd23f; animation: sbi 1.1s linear infinite; }
+  @keyframes sbi { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  #savebox.done { border-color: #33e0e0; } #savebox.done .st { color: #33e0e0; }
   /* touch controls */
   body.touch { height: 100dvh; box-sizing: border-box; touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
   html:has(body.touch) { overscroll-behavior: none; }
@@ -56,6 +66,7 @@
 <body>
 <div id="stage"><canvas id="screen"></canvas><canvas id="screenGL"></canvas></div>
 <div id="tui"></div>
+<div id="savebox"><div class="st"></div><div class="bar"><div class="fill"></div><div class="ind"></div></div><div class="sb"></div></div>
 
 <script>
 'use strict';
@@ -1579,6 +1590,38 @@ function initTouch() {
   document.addEventListener('gesturestart', function (e) { e.preventDefault(); });                                           // no pinch zoom
   ['touchend', 'click'].forEach(function (n) { window.addEventListener(n, function () { audioUnlock(screen !== SCREEN_BOOT); }); });   // iOS only unlocks audio on these
   window.addEventListener('orientationchange', function () { setTimeout(setupCanvas, 200); });
+}
+
+// ------------------------------------------------------------------
+// Saving progress: while a kill reel is being captured and encoded, a clear box says so (with a percentage bar),
+// so players know to wait for the share / download box.
+// ------------------------------------------------------------------
+const saveBox = { el: document.getElementById('savebox'), key: '' };
+function reelProgress() {
+  let tot = 0, done = 0;
+  reel.order.forEach(function (c, i) { const n = c.frames.length; tot += n; if (i < reel.cur) done += n; else if (i === reel.cur) done += Math.min(n, reel.pos); });
+  return tot ? Math.max(0, Math.min(1, done / tot)) : 0;
+}
+function saveUIUpdate() {
+  const el = saveBox.el; if (!el) return;
+  let mode = '', st = '', sb = '', pct = 0;
+  if (screen === SCREEN_REEL && reel.encoding) { mode = 'ind'; st = (reel.kind === 'video' ? 'BUILDING YOUR VIDEO...' : 'BUILDING YOUR GIF...'); sb = 'ALMOST DONE. KEEP THIS SCREEN OPEN.'; }
+  else if (screen === SCREEN_REEL && reel.exporting) { mode = 'pct'; pct = Math.round(reelProgress() * 100); st = (reel.kind === 'video' ? 'SAVING YOUR VIDEO ' : 'SAVING YOUR GIF ') + pct + '%'; sb = 'PLEASE WAIT. KEEP THIS SCREEN OPEN. A SAVE BOX WILL APPEAR WHEN IT IS READY.'; }
+  else if (saveBox.doneT > 0 && screen === SCREEN_REEL) { saveBox.doneT -= 1; mode = 'done'; st = saveBox.doneTitle; sb = saveBox.doneSub; }
+  const key = mode + '|' + st + '|' + sb;
+  if (key === saveBox.key) { if (mode === 'pct') el.querySelector('.fill').style.width = pct + '%'; return; }
+  saveBox.key = key;
+  if (!mode) { el.className = ''; return; }
+  el.className = 'on' + (mode === 'done' ? ' done' : '');
+  el.querySelector('.st').textContent = st; el.querySelector('.sb').textContent = sb;
+  el.querySelector('.fill').style.display = (mode === 'ind') ? 'none' : 'block';
+  el.querySelector('.fill').style.width = (mode === 'pct' ? pct : (mode === 'done' ? 100 : 0)) + '%';
+  el.querySelector('.ind').style.display = (mode === 'ind') ? 'block' : 'none';
+}
+function saveDone(kind, how) {                  // called when the file is finished: tell the player what to do next
+  saveBox.doneT = how === 'share' ? 900 : 420;
+  saveBox.doneTitle = (kind === 'gif' ? 'YOUR GIF IS READY' : 'YOUR VIDEO IS READY');
+  saveBox.doneSub = how === 'share' ? 'TAP THE SAVE / SHARE BUTTON BELOW, THEN CHOOSE SAVE IMAGE OR SAVE VIDEO.' : 'SAVED TO YOUR DOWNLOADS FOLDER.';
 }
 function mouseController(c) {
   if (!mouse.on || !mouse.has || roundState === ROUND_MATCH_OVER) { mouse.fire = false; return; }
@@ -3927,7 +3970,8 @@ function reelStartVideoExport() {
     reel.rec.onstop = function () {
       if (reel.discard) { reel.discard = false; return; }
       const blob = new Blob(reel.chunks, { type: reel.mime });
-      reel.msg = (deliverFile(blob, 'SHOWDOWN_KILL_REEL.' + reel.ext) === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED VIDEO TO DOWNLOADS'; reel.msgT = 260;
+      const how = deliverFile(blob, 'SHOWDOWN_KILL_REEL.' + reel.ext); saveDone('video', how);
+      reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED VIDEO TO DOWNLOADS'; reel.msgT = 260;
     };
     reel.title0 = document.title; document.title = 'REC - SAVING KILL REEL';
     reel.exporting = true; reel.discard = false;
@@ -4050,11 +4094,12 @@ function gifEncode() {
 function gifFinish() {
   gifCap.on = false;
   reel.exporting = false; reel.encoding = true;
-  reel.msg = 'MAKING GIF...'; reel.msgT = 9999;
+  reel.msg = 'MAKING GIF...'; reel.msgT = 9999; reel.kind = 'gif';
   setTimeout(function () {                              // let the screen show the message first
     try {
       const blob = gifEncode();
-      reel.msg = (deliverFile(blob, 'SHOWDOWN_KILL_REEL.gif') === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED GIF TO DOWNLOADS'; reel.msgT = 260;
+      const how = deliverFile(blob, 'SHOWDOWN_KILL_REEL.gif'); saveDone('gif', how);
+      reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED GIF TO DOWNLOADS'; reel.msgT = 260;
     } catch (e) {
       reel.msg = 'GIF FAILED'; reel.msgT = 200;
       reel.encoding = false; gifCap.frames = [];
@@ -4136,6 +4181,7 @@ function loop(now) {
   }
   draw();
   touchUIUpdate();
+  saveUIUpdate();
   if (gifCap.on) gifCapture();
   if (bootOpenT > 0) bootOpenT -= 1;
   updateTreeFlash();   // tree-shot screen flash timing (render frames)

@@ -1967,6 +1967,7 @@ function setupGame() {
   stage = 1; trick = null; justUnlocked = false;
   headshots[0] = 0; headshots[1] = 0;
   roundNumber = 0;
+  colvinRound = (Math.random() < COLVIN_ODDS) ? 1 + Math.floor(Math.random() * 10) : 0;
   popups.length = 0;
   obstacleHitCount = 0;
   winningIndex = -1;
@@ -2354,12 +2355,13 @@ MELEE_SPRITES.push(
   {"n":"RIOT SHIELD S","w":12,"h":18,"p":["ca5c66","34606f","64d2dd","ade6ec","abb4c6","999eab","fa0001","b53a3d"],"d":"016a01615a62512851625121423421516251213541215162512851625a625a625a625a625a625a611c817a827a827a827a816111881151"});
 const SHIELD_ID = MELEE_SPRITES.findIndex(function (q) { return q.n === 'RIOT SHIELD'; });
 const SHIELD_S_ID = SHIELD_ID + 1;
-const COLVIN_ODDS = 0.08;         // chance per round that P1 spawns with the shield
+const COLVIN_ODDS = 0.08;         // chance PER GAME (about 1 game in 12) that COLVIN MODE shows up at all; it then appears in exactly one round
+let colvinRound = 0;              // the one round (1-10) of this game that gets the shield; 0 = none this game
 const SH_HIT = 12, SH_T0 = 20;   // finale beats: bash lands (12), P2 launched (20); the big shield stamps the screen 16 steps after P2 detonates
 let colvin = false, shieldFlash = 0;
 function rollColvin() {
   let forced = false; try { forced = location.hash === '#colvin'; } catch (e) { /* ignore */ }
-  colvin = forced || Math.random() < COLVIN_ODDS;
+  colvin = forced || (colvinRound > 0 && roundNumber + 1 === colvinRound);
   shieldFlash = 0;
   if (colvin) sfx('superkill');
 }

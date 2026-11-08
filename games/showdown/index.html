@@ -1244,7 +1244,7 @@ function initInput() {
     if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
     if (!e.repeat) {
       keysPressedThisStep.add(e.code);
-      handleEffectToggleKey(e.code);   // Stage 5: effect toggles (Q/E/T/Y/U/I/Digit0)
+      if (!(screen === SCREEN_CONTROLS && ctl.editing)) handleEffectToggleKey(e.code);   // Stage 5: effect toggles (not while typing a name)
     }
     keysDown.add(e.code);
   });
@@ -1265,35 +1265,64 @@ function initInput() {
 // A / Start = 1 player, B = 2 players. Back/View = reset to SELECT GAME.
 // ------------------------------------------------------------------
 const PAD_DEADZONE = 0.4;
-const padPrevFire = [false, false];
+// Many PCs list several controllers (virtual / duplicate Xbox pads, wireless dongles) and the real one may not be #0.
+// So pads are assigned by USE: the first controller you touch becomes Player 1's, and in 2P a second controller that
+// gets touched becomes Player 2's. Menus react to any controller.
 const pads = [null, null];          // per-player state this step, or null if no pad
-let padEdge = { a: false, b: false, start: false, back: false };
+const padOwner = [-1, -1];          // gamepad index owned by each player
+const padPrev = {};                 // per gamepad index: previous buttons / axes, for edge detection
+let padStepN = 0;
+const padLastAct = {};
+let padEdge = { a: false, b: false, start: false, back: false, y: false };
 
-function pollGamepads() {
-  const list = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
-  padEdge = { a: false, b: false, start: false, back: false };
-  for (let i = 0; i < 2; i++) {
-    const gp = list[i];
-    if (!gp) { pads[i] = null; padPrevFire[i] = false; continue; }
-    const btn = (n) => !!(gp.buttons[n] && gp.buttons[n].pressed);
-    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-    const fireHeld = btn(0) || btn(5) || btn(7);
-    pads[i] = {
-      left:  ax < -PAD_DEADZONE || btn(14),
-      right: ax >  PAD_DEADZONE || btn(15),
-      up:    ay < -PAD_DEADZONE || btn(12),
-      down:  ay >  PAD_DEADZONE || btn(13),
-      fireEdge: fireHeld && !padPrevFire[i],
-    };
-    padPrevFire[i] = fireHeld;
-    if (i === 0) {
-      const prev = pollGamepads.prev || {};
-      const now = { a: btn(0), b: btn(1), start: btn(9), back: btn(8) };
-      padEdge = { a: now.a && !prev.a, b: now.b && !prev.b,
-                  start: now.start && !prev.start, back: now.back && !prev.back };
-      pollGamepads.prev = now;
+function padRead(gp) {
+  const std = gp.mapping === 'standard';
+  const btn = (n) => !!(gp.buttons[n] && gp.buttons[n].pressed);
+  let ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+  let left = ax < -PAD_DEADZONE, right = ax > PAD_DEADZONE, up = ay < -PAD_DEADZONE, down = ay > PAD_DEADZONE;
+  if (std) { left = left || btn(14); right = right || btn(15); up = up || btn(12); down = down || btn(13); }
+  else if (gp.axes.length > 9) {                              // non-standard pads often report the d-pad as one "hat" axis (-1 ... 1, rest ~1.29)
+    const h = gp.axes[9];
+    if (h >= -1.05 && h <= 1.05) {
+      const dir = Math.round((h + 1) * 3.5);                    // 0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left, 7 up-left
+      up = up || dir === 7 || dir === 0 || dir === 1; right = right || (dir >= 1 && dir <= 3);
+      down = down || (dir >= 3 && dir <= 5); left = left || (dir >= 5 && dir <= 7);
     }
   }
+  const fire = std ? (btn(0) || btn(5) || btn(7)) : (btn(0) || btn(1) || btn(2) || btn(3));
+  return { left: left, right: right, up: up, down: down, fire: fire, a: btn(0), b: btn(1), start: btn(9), back: btn(8), y: btn(3) };
+}
+
+function pollGamepads() {
+  padStepN += 1;
+  const raw = navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
+  padEdge = { a: false, b: false, start: false, back: false, y: false };
+  const st = {};
+  for (let i = 0; i < raw.length; i++) {
+    const gp = raw[i]; if (!gp) { delete padPrev[i]; continue; }
+    const cur = padRead(gp), prev = padPrev[i] || {};
+    st[i] = cur;
+    const act = (cur.fire && !prev.fire) || (cur.a && !prev.a) || (cur.b && !prev.b) || (cur.start && !prev.start) ||
+                (cur.left && !prev.left) || (cur.right && !prev.right) || (cur.up && !prev.up) || (cur.down && !prev.down);
+    if (act) {
+      padLastAct[i] = padStepN;
+      if (padOwner[0] < 0 || !raw[padOwner[0]]) padOwner[0] = i;
+      else if (i !== padOwner[0]) {
+        if (mode === 2 && (padOwner[1] < 0 || !raw[padOwner[1]]) && i !== padOwner[0]) padOwner[1] = i;
+        else if (mode !== 2 && padStepN - (padLastAct[padOwner[0]] || 0) > 300) padOwner[0] = i;   // old pad idle for 5 s: follow the new one
+      }
+    }
+    padEdge.a = padEdge.a || (cur.a && !prev.a); padEdge.b = padEdge.b || (cur.b && !prev.b);
+    padEdge.start = padEdge.start || (cur.start && !prev.start); padEdge.back = padEdge.back || (cur.back && !prev.back);
+    padEdge.y = padEdge.y || (cur.y && !prev.y);
+  }
+  for (let p = 0; p < 2; p++) {
+    const i = padOwner[p];
+    if (i < 0 || !st[i]) { pads[p] = null; if (i >= 0 && !raw[i]) padOwner[p] = -1; continue; }
+    const cur = st[i], prev = padPrev[i] || {};
+    pads[p] = { left: cur.left, right: cur.right, up: cur.up, down: cur.down, fireEdge: cur.fire && !prev.fire };
+  }
+  for (const i in st) padPrev[i] = st[i];
 }
 
 // Returns an (x, y) velocity for this controller this logic step.
@@ -1337,6 +1366,16 @@ function readKeyboardController(index) {
 // ------------------------------------------------------------------
 // Optional MOUSE control for P1: the cowboy walks to the pointer, left click fires. Toggle with O.
 // ------------------------------------------------------------------
+const NAME_KEY = 'showdown2026.name';
+let p1Name = '';                                           // optional gamertag, 6 chars max, shown in match text and in saved captures
+function loadName() { try { p1Name = (localStorage.getItem(NAME_KEY) || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6); } catch (e) { p1Name = ''; } }
+function saveName() { try { localStorage.setItem(NAME_KEY, p1Name); } catch (e) { /* ignore */ } }
+const NAME_CHARS = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function nameKeyChar(code) {
+  let m = /^Key([A-Z])$/.exec(code); if (m) return m[1];
+  m = /^Digit(\d)$/.exec(code); if (m) return m[1];
+  return code === 'Minus' ? '-' : code === 'Period' ? '.' : code === 'Space' ? ' ' : '';
+}
 const CTRL_KEY = 'showdown2026.ctrl';
 const CTRL_LIST = ['mouse', 'keyboard', 'pad'];          // menu order: 1 MOUSE, 2 KEYBOARD, 3 CONTROLLER
 let control = 'mouse';                                    // MOUSE is the default
@@ -1367,7 +1406,7 @@ function mouseToLogical(e) {
   mouse.has = true;
 }
 function initMouse() {
-  loadMouse();
+  loadMouse(); loadName();
   try { careerHeads = parseInt(localStorage.getItem(HEADS_KEY), 10) || 0; } catch (e) { careerHeads = 0; }
   window.addEventListener('pointermove', function (e) { if (e.pointerType === 'mouse') { mouseToLogical(e); if (screen === SCREEN_CONTROLS) ctlHover(); } });
   window.addEventListener('pointerdown', function (e) {            // controls menu: click a row to choose it
@@ -1904,7 +1943,7 @@ function beginRound() {
   assignOwnTrees();
   ammo[0] = AMMO_MAX; ammo[1] = AMMO_MAX; reloadFlash[0] = 0; reloadFlash[1] = 0;
   aiReset();   // Stage 8
-  roundHits = 0; melee = null;
+  roundHits = 0; melee = null; rollColvin();
   struck[0] = false; struck[1] = false;
   hitElapsed = 0;
   roundNumber += 1;
@@ -1992,12 +2031,12 @@ const CTL_ROWS = [
   { name: 'KEYBOARD',   desc: 'WASD MOVE  F FIRE' },
   { name: 'CONTROLLER', desc: 'D-PAD OR STICK + A' },
 ];
-const CTL_Y0 = 129, CTL_STEP = 22, CTL_H = 19, CTL_BEAT = 32;
-const ctl = { sel: 0, t: 0, phase: 'idle', countdown: 0, pend: { choice: 1, v: 'classic' }, padUp: false, padDown: false };
+const CTL_Y0 = 129, CTL_STEP = 21, CTL_H = 19, CTL_BEAT = 32;
+const ctl = { editing: false, letters: [0, 0, 0, 0, 0, 0], pos: 0, nUp: true, nDn: true, nRt: true, nLf: true, sel: 0, t: 0, phase: 'idle', countdown: 0, pend: { choice: 1, v: 'classic' }, padUp: false, padDown: false };
 function openControls(choice, v) {
   ctl.pend = { choice: choice, v: v };
   ctl.sel = select.viaPad ? 2 : Math.max(0, CTRL_LIST.indexOf(control));
-  ctl.t = 0; ctl.phase = 'idle'; ctl.countdown = 0; ctl.padUp = ctl.padDown = false;
+  ctl.editing = false; ctl.t = 0; ctl.phase = 'idle'; ctl.countdown = 0; ctl.padUp = ctl.padDown = false;
   screen = SCREEN_CONTROLS;
   updateMouseCursor();
 }
@@ -2016,6 +2055,31 @@ function updateControls() {
     if (ctl.countdown <= 0) startGame(ctl.pend.choice, ctl.pend.v);
     return;
   }
+  if (ctl.editing) {                                     // the arcade initials system, six slots: up/down letter, left/right move, Enter next/done
+    const k = keysPressedThisStep, g = pads[0];
+    const pU = !!(g && g.up), pD = !!(g && g.down), pL = !!(g && g.left), pR = !!(g && g.right);
+    const up = k.has('ArrowUp') || k.has('KeyW') || (pU && !ctl.nUp), dn = k.has('ArrowDown') || k.has('KeyS') || (pD && !ctl.nDn);
+    const rt = k.has('ArrowRight') || k.has('KeyD') || (pR && !ctl.nRt);
+    const lf = k.has('ArrowLeft') || k.has('KeyA') || k.has('Backspace') || (pL && !ctl.nLf);
+    ctl.nUp = pU; ctl.nDn = pD; ctl.nRt = pR; ctl.nLf = pL;
+    const ok = k.has('Enter') || k.has('NumpadEnter') || k.has('Space') || padEdge.a || padEdge.start;
+    const L = NAME_CHARS.length;
+    if (up) { ctl.letters[ctl.pos] = (ctl.letters[ctl.pos] + 1) % L; sfx('bounce'); }
+    if (dn) { ctl.letters[ctl.pos] = (ctl.letters[ctl.pos] + L - 1) % L; sfx('bounce'); }
+    if (rt && ctl.pos < 5) ctl.pos += 1;
+    if (lf && ctl.pos > 0) ctl.pos -= 1;
+    if (k.has('Escape') || (padEdge.b && ctl.pos === 0)) { ctl.editing = false; return; }
+    if (padEdge.b && ctl.pos > 0) ctl.pos -= 1;
+    if (ok) {
+      if (ctl.letters[ctl.pos] !== 0 && ctl.pos < 5) { ctl.pos += 1; sfx('select'); }      // next slot
+      else {                                                                               // a blank slot (or the last one) ends the name
+        let n = ''; for (let i = 0; i < 6 && ctl.letters[i] !== 0; i++) n += NAME_CHARS[ctl.letters[i]];
+        p1Name = n; saveName(); ctl.editing = false; sfx('win');
+      }
+    }
+    return;
+  }
+  if (keysPressedThisStep.has('KeyN') || padEdge.y) { ctl.editing = true; ctl.pos = 0; ctl.nUp = ctl.nDn = ctl.nRt = ctl.nLf = true; ctl.letters = [0, 0, 0, 0, 0, 0]; for (let i = 0; i < p1Name.length && i < 6; i++) ctl.letters[i] = Math.max(0, NAME_CHARS.indexOf(p1Name[i])); sfx('select'); return; }
   const k = keysPressedThisStep, g = pads[0];
   let pick = -1;
   if (k.has('Digit1') || k.has('Numpad1')) pick = 0;
@@ -2045,7 +2109,26 @@ function ctlBg() {                                       // cover art cropped to
   x.fillStyle = '#000'; x.fillRect(0, 84, 56, 20); x.fillRect(0, 99, 66, 5);   // leftover hand pixels
   ctlBg.c = c; return c;
 }
+function drawNameEntry() {
+  fillBlack();
+  const title = 'PLAYER NAME', tx = Math.floor((PLAYFIELD_W - textWidth(title)) / 2);
+  for (let i = 0; i < title.length; i++) if (title[i] !== ' ') drawGlyph(title[i], tx + i * GLYPH_ADV, 8, TREE_COLORS[(i + Math.floor(ctl.t / 6)) % TREE_COLORS.length]);
+  ctx.fillStyle = '#ffd23f'; ctx.fillRect(10, 19, PLAYFIELD_W - 20, 1);
+  drawCenter('ENTER YOUR NAME', 50, COLOR.cyan);
+  drawCenter('UP TO SIX LETTERS', 62, '#888888');
+  const blink = (Math.floor(ctl.t / 15) % 2 === 0), sc = 3, cw = GLYPH_W * sc, sp = 7, total = 6 * cw + 5 * sp, x0 = Math.floor((PLAYFIELD_W - total) / 2);
+  for (let i = 0; i < 6; i++) {
+    const x = x0 + i * (cw + sp), ch = NAME_CHARS[ctl.letters[i]];
+    if (ch !== ' ') drawGlyphScaled(ch, x, 100, i === ctl.pos ? COLOR.white : '#9a9a9a', sc);
+    ctx.fillStyle = (i === ctl.pos) ? '#ffd23f' : '#444444';
+    if (i !== ctl.pos || blink) ctx.fillRect(x, 123, cw, 2);
+    if (i === ctl.pos) { ctx.fillRect(x + 7, 92, 1, 1); ctx.fillRect(x + 6, 93, 3, 1); ctx.fillRect(x + 6, 128, 3, 1); ctx.fillRect(x + 7, 129, 1, 1); }
+  }
+  drawCenter('UP DOWN LETTER  ENTER OK', 170, '#888888');
+  drawCenter('BLANK = DONE   ESC CANCEL', 182, '#888888');
+}
 function drawControls() {
+  if (ctl.editing) { drawNameEntry(); return; }
   fillBlack();
   // top of the title art: header line, ENGINE wordmark, sunburst
   ctx.drawImage(ctlBg(), 0, 0);
@@ -2073,8 +2156,11 @@ function drawControls() {
   }
   const base = CTL_Y0 + 3 * CTL_STEP + 1;
   for (let i = 0; i < 4; i++) R(0, base + i * 2, PLAYFIELD_W, 1, band[3 - i]);
-  if (ctl.pend.choice === 2 && ctl.pend.v !== 'arcade') ctlText('PLAYER 2: ARROWS + ENTER', base + 9, '#3366FF');
-  ctlText('ENTER OK   ESC BACK', 215, '#8a6a50');
+  if (ctl.pend.choice === 2 && ctl.pend.v !== 'arcade') ctlText('PLAYER 2: ARROWS + ENTER', base + 8, '#3366FF');
+  const nk = (control === 'pad') ? 'Y' : 'N';
+  if (p1Name) ctlText('PLAYER: ' + p1Name + '  ' + nk + ' CHANGE', 209, COLOR.cyan);
+  else ctlText('PRESS ' + nk + ' TO NAME PLAYER', 209, (ctl.t >> 4) & 1 ? COLOR.white : COLOR.cyan);   // flashing, bright: easy to notice
+  ctlText('ENTER OK   ESC BACK', 217, '#8a6a50');
 }
 
 // ------------------------------------------------------------------
@@ -2100,7 +2186,8 @@ function afterRoundClassic() {
 
 // Stage 3: round state machine (READY -> PLAY -> HIT -> next round / STAGE / GAME OVER -> registry)
 function updatePlay() {
-  if (melee) { melee.t += 1; if (melee.fin) cueSfx(melee.t); }
+  if (melee) { melee.t += 1; if (melee.fin) { if (melee.id === SHIELD_ID) shieldSfx(melee.t); else cueSfx(melee.t); } }
+  if (shieldFlash > 0) shieldFlash -= 1;
   if (roundState === ROUND_READY) {
     // Beat before play: figures can reposition, but no firing and no bullets.
     movePlayers(false);
@@ -2213,6 +2300,7 @@ function checkReload(i) {
 function bulletHitPlayer(b) {
   for (let j = 0; j < 2; j++) {
     if (j === b.owner && !SELF_HIT) continue;
+    if (b.cv && j === 0) continue;           // COLVIN MODE: P1 can't shoot himself with a bounced shot
     if (struck[j]) continue;                 // already down this round: shots pass through
     const p = players[j];
     if (rectsOverlap(b.x, b.y, BULLET_SIZE, BULLET_SIZE, p.x, p.y, FIG_W, FIG_H)) return j;
@@ -2248,18 +2336,246 @@ const CUE_CUT = 14;               // step at which P2 comes apart
 function pickMeleeId() {
   let forced = false; try { forced = location.hash === '#cue'; } catch (e) { /* ignore */ }
   if (forced || Math.random() < CUE_ODDS) return CUE_ID;
-  let i; do { i = Math.floor(Math.random() * MELEE_SPRITES.length); } while (i === CUE_ID);
+  let i; do { i = Math.floor(Math.random() * MELEE_SPRITES.length); } while (i === CUE_ID || i >= MELEE_SPRITES.length - 2);   // the last two sprites are the riot shield
   return i;
 }
 function triggerMelee() {
-  const id = pickMeleeId();
-  melee = { id: id, t: 0, seed: (Math.random() * 1e9) | 0, fin: id === CUE_ID };
+  const id = (colvin && typeof SHIELD_ID !== 'undefined') ? SHIELD_ID : pickMeleeId();
+  melee = { id: id, t: 0, seed: (Math.random() * 1e9) | 0, fin: id === CUE_ID || id === SHIELD_ID };
   landPlayerHit(0, 1, null, true);             // red scores the kill; blue spins and falls
+}
+
+// ------------------------------------------------------------------
+// COLVIN MODE: a rare round modifier. P1 spawns with a riot shield that bounces P2's bullets back faster (and
+// auto-aimed), and a shield bash on P2 is the SHIELD SLAM, a game-ending finale. Art generated with Flux in WanGP.
+// ------------------------------------------------------------------
+MELEE_SPRITES.push(
+  {"n":"RIOT SHIELD","w":24,"h":36,"p":["455a64","a6b8cb","193343","64d1dc","aeb6c9","a6a7ba","c6e5e8","4797a3","83828b","954d4c","ea4046","f90303"],"d":"02119i1103115j719101115m11915m9253911e9153925261311e316152925261318141734881316152925261318174488131615292526131814b718131615292526131814972418131615292526131118c11316152925261113e115392536g53925m925m925m925m925m925m925m925m925m925m925m92516k5191a1cma2cma2cma2cma2cma2cma2cma2b1cla10191ck9111011191bi91110172611i6172"},
+  {"n":"RIOT SHIELD S","w":12,"h":18,"p":["ca5c66","34606f","64d2dd","ade6ec","abb4c6","999eab","fa0001","b53a3d"],"d":"016a01615a62512851625121423421516251213541215162512851625a625a625a625a625a625a611c817a827a827a827a816111881151"});
+const SHIELD_ID = MELEE_SPRITES.findIndex(function (q) { return q.n === 'RIOT SHIELD'; });
+const SHIELD_S_ID = SHIELD_ID + 1;
+const COLVIN_ODDS = 0.08;         // chance per round that P1 spawns with the shield
+const SH_HIT = 12, SH_T0 = 20;   // finale beats: bash lands (12), P2 launched (20); the big shield stamps the screen 16 steps after P2 detonates
+let colvin = false, shieldFlash = 0;
+function rollColvin() {
+  let forced = false; try { forced = location.hash === '#colvin'; } catch (e) { /* ignore */ }
+  colvin = forced || Math.random() < COLVIN_ODDS;
+  shieldFlash = 0;
+  if (colvin) sfx('superkill');
+}
+function shieldRect() { const p = players[0]; return { x: p.x + 6, y: p.y - 1, w: 12, h: 18 }; }
+function shieldDeflect(b) {
+  if (!colvin || b.owner !== 1 || struck[0] || b.dx >= 0) return;
+  const s = shieldRect();
+  if (!rectsOverlap(b.x, b.y, BULLET_SIZE, BULLET_SIZE, s.x, s.y, s.w, s.h)) return;
+  const v = players[1];
+  const spd = Math.min(5.6, Math.max(3.2, Math.abs(b.dx) * 1.8));
+  b.x = s.x + s.w + 1;                                                   // pop out in front of the shield
+  b.dx = spd;
+  const steps = Math.max(1, (v.x - b.x) / spd), want = (v.y + FIG_H / 2 - BULLET_SIZE / 2 - b.y) / steps;
+  b.dy = Math.max(-3.5, Math.min(3.5, b.dy * 0.4 + want * 0.6));        // redirected, aimed back at P2
+  b.owner = 0; b.cv = true;                                              // P1's bullet now; immune to P1's own shield
+  b.ric = (b.ric || 0) + 1; b.tree = Math.min(TREE_DOUBLE_MAX, (b.tree || 0) + 1);
+  b.lastObs = -1; b.obsCd = 0;
+  shieldFlash = 8; sfx('deflect');
+}
+function drawShield(p) {
+  const x = p.x + 6, y = p.y - 1;
+  ctx.save(); ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(meleeCanvas(SHIELD_S_ID), x, y);
+  if (shieldFlash > 0) { ctx.fillStyle = 'rgba(255,255,255,' + (0.15 + shieldFlash * 0.07) + ')'; ctx.fillRect(x + 1, y + 1, 10, 16); }
+  ctx.restore();
+}
+function shieldSim(seed) {                       // P2 launched off the shield: bounces around the box, deterministic per seed
+  if (shieldSim.c && shieldSim.c.seed === seed) return shieldSim.c;
+  const v = players[1], a = players[0], dir = (v.x >= a.x) ? 1 : -1, FLOOR = PLAYFIELD_H - 4;
+  let x = v.x + FIG_W / 2, y = v.y + FIG_H / 2, vx = dir * 4.6, vy = -1.2 - meleeRand(seed) * 1.5, rot = 0, w = dir * 0.42;
+  const path = [{ x: x, y: y, rot: 0 }], ev = [];
+  let n = 0;
+  for (let i = 1; i < 140 && n < 5; i++) {
+    x += vx; vy += 0.12; y += vy; rot += w;
+    let hit = false;
+    if (x < 7) { x = 7; vx = Math.abs(vx) * 0.95; hit = true; } else if (x > PLAYFIELD_W - 7) { x = PLAYFIELD_W - 7; vx = -Math.abs(vx) * 0.95; hit = true; }
+    if (y < 9) { y = 9; vy = Math.abs(vy) * 0.95; hit = true; } else if (y > FLOOR - 8) { y = FLOOR - 8; vy = -Math.max(3.2, Math.abs(vy)) * 0.95; hit = true; }
+    path.push({ x: x, y: y, rot: rot });
+    if (hit) { n++; ev.push({ i: i, x: x, y: y }); }
+  }
+  shieldSim.c = { seed: seed, path: path, ev: ev, te: path.length - 1 };
+  return shieldSim.c;
+}
+function shieldSfx(t) {
+  if (t === 1) sfx('cuewind');
+  if (t === SH_HIT) sfx('cueboom');
+  const s = shieldSim(melee.seed);
+  for (let k = 0; k < s.ev.length; k++) if (SH_T0 + s.ev[k].i === t) sfx(k === s.ev.length - 1 ? 'cueboom' : 'cueslash');
+  if (t === SH_T0 + s.te + 16) sfx('cueboom');
+  if (t === 100 || t === 190) sfx('cuefan');
+  if (t === 205) sfx('cuewin');
+}
+function bigAt(label, cx, cy, col, sc) {
+  const adv = GLYPH_ADV * sc + 1, w = label.length * adv;
+  let bx = Math.round(cx - w / 2); bx = Math.max(2, Math.min(PLAYFIELD_W - w - 2, bx));
+  const by = Math.max(2, Math.min(PLAYFIELD_H - 5 * sc - 6, Math.round(cy - 3 * sc)));
+  for (let i = 0; i < label.length; i++) { drawGlyphScaled(label[i], bx + i * adv + 1, by + 1, '#000000', sc); drawGlyphScaled(label[i], bx + i * adv, by, col, sc); }
+}
+function drawShieldFinale(m) {
+  const t = m.t, a = players[0], v = players[1], seed = m.seed, sp = MELEE_SPRITES[SHIELD_ID];
+  const dir = (v.x >= a.x) ? 1 : -1, FLOOR = PLAYFIELD_H - 4;
+  const sim = shieldSim(seed), te = SH_T0 + sim.te, SL = te + 16;   // te = moment P2 finally explodes, SL = shield stamp
+  const hx0 = Math.round(v.x + FIG_W / 2), hy0 = Math.round(v.y + FIG_H / 2);
+  const WORDS = ['BONK!', 'CRUNCH!', 'SPLAT!', 'THUD!', 'KABLAM!'];
+  ctx.save(); ctx.imageSmoothingEnabled = false;
+  // police-light sunburst (red / blue) after the bash
+  if (t >= SH_HIT) {
+    const k = Math.min(1, (t - SH_HIT) / 20), cx = 80, cy = 100, n = 16;
+    ctx.save(); ctx.globalAlpha = 0.3 * k;
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * Math.PI * 2 + t * 0.03, a1 = a0 + Math.PI / n;
+      ctx.fillStyle = ((i + (t >> 3)) & 1) ? '#ff2a2a' : '#2a5bff';
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a0) * 220, cy + Math.sin(a0) * 220); ctx.lineTo(cx + Math.cos(a1) * 220, cy + Math.sin(a1) * 220); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+  // P2: pancaked against the shield, then rocketed around the arena like a pinball, then he goes off
+  if (t >= SH_HIT && t < te) {
+    const fig = pickFigureSprite(1);
+    let px, py, rot, sx, sy;
+    if (t < SH_T0) { const k = (t - SH_HIT) / (SH_T0 - SH_HIT); px = hx0 + dir * k * 4; py = hy0; rot = 0; sx = 0.22 + 0.2 * k; sy = 1.9 - 0.3 * k; }
+    else { const q = sim.path[Math.min(sim.te, t - SH_T0)]; px = q.x; py = q.y; rot = q.rot; sx = 1.7; sy = 1.7; }
+    if (t >= SH_T0) for (let g = 6; g >= 1; g--) {                  // motion trail
+      const q = sim.path[Math.max(0, Math.min(sim.te, t - SH_T0 - g * 2))];
+      ctx.save(); ctx.globalAlpha = 0.07 * (7 - g); ctx.translate(q.x, q.y); ctx.rotate(q.rot); ctx.scale(1.7, 1.7);
+      drawSprite(fig, -FIG_W / 2, -FIG_H / 2, { flipX: true, player: 1 }); ctx.restore();
+    }
+    ctx.save(); ctx.translate(px, py); ctx.rotate(rot); ctx.scale(sx, sy);
+    drawSprite(fig, -FIG_W / 2, -FIG_H / 2, { flipX: true, player: 1 });
+    ctx.restore();
+    if (t >= SH_T0 && (t & 1)) { ctx.fillStyle = '#ffd23f'; ctx.fillRect(Math.round(px - dir * 6 + (meleeRand(seed + t) - 0.5) * 8), Math.round(py + (meleeRand(seed + t * 7) - 0.5) * 10), 2, 2); }
+    if (t >= SH_T0 && t < SH_T0 + 8) {                               // speed lines behind the launch
+      ctx.fillStyle = '#ffffff';
+      for (let j = 0; j < 7; j++) ctx.fillRect(Math.round(px - dir * (10 + j * 6)), Math.round(py - 12 + j * 4), 8, 1);
+    }
+  }
+  // P1's shield: wind-up, SLAM into P2, then held aloft
+  {
+    let ang, sc, hx, hy;
+    if (t < SH_HIT) { const e = t / SH_HIT; sc = 1 + e * 1.6; ang = -0.7 * dir * (1 - e); hx = a.x + FIG_W / 2 + dir * (2 - e * 6); hy = a.y + 8; }
+    else if (t < SH_HIT + 8) { sc = 2.7; ang = 0.05 * dir; hx = hx0 - dir * 5; hy = hy0; }
+    else { sc = 2.3 + Math.sin(t / 6) * 0.12; ang = (0.18 + Math.sin(t / 9) * 0.1) * dir; hx = a.x + FIG_W / 2 + dir * 8; hy = a.y + 2 + Math.sin(t / 5) * 2; }
+    ctx.save(); ctx.translate(Math.round(hx), Math.round(hy)); ctx.rotate(ang); ctx.scale(sc, sc);
+    ctx.drawImage(meleeCanvas(SHIELD_ID), -sp.w / 2, -sp.h / 2); ctx.restore();
+  }
+  // impact: shock rings + WHAM
+  if (t >= SH_HIT && t < SH_HIT + 26) {
+    const d = t - SH_HIT;
+    for (let r = 0; r < 3; r++) { const rr = d * (4 + r * 2) - r * 6; if (rr <= 0) continue; ctx.strokeStyle = ['#ffffff', '#ffd23f', '#ff2a2a'][r]; ctx.lineWidth = 3 - r * 0.8; ctx.beginPath(); ctx.arc(hx0, hy0, rr, 0, Math.PI * 2); ctx.stroke(); }
+    bigAt('WHAM!', hx0, hy0 - 14 - d * 0.5, '#ffd23f', 3 - (d > 12 ? 1 : 0));
+  }
+  // every wall hit gets a word and a flash
+  for (let k = 0; k < sim.ev.length; k++) {
+    const d = t - (SH_T0 + sim.ev[k].i); if (d < 0 || d > 12) continue;
+    const e = sim.ev[k];
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(e.x, e.y, d * 3 + 2, 0, Math.PI * 2); ctx.stroke();
+    if (k < sim.ev.length - 1) bigAt(WORDS[k % 4], e.x, e.y - 10, TREE_COLORS[(k * 3 + d) % 8], 2);
+  }
+  // detonation
+  if (t >= te) {
+    const dt = t - te, fig = pickFigureSprite(1), ex = sim.path[sim.te].x, ey = sim.path[sim.te].y, bx0 = ex - FIG_W / 2, by0 = ey - FIG_H / 2;
+    const yb = function (c, r) { return r === 0 ? -1 : (r === 4 ? 17 : r * 4 + ((meleeRand(seed + c * 61 + r * 13) * 3) | 0) - 1); };
+    const xb = function (r, k) { return k === 0 ? -1 : (k === 2 ? 9 : 4 + ((meleeRand(seed + r * 97 + 5) * 3) | 0) - 1); };
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 2; c++) {
+      const q = r * 2 + c, side = c ? 1 : -1;
+      let px = 0, py = 0, vxp = side * (1.4 + meleeRand(seed + q * 11) * 2.6), vyp = -(3 + meleeRand(seed + q * 23) * 3.4) - (3 - r) * 0.7, rot = 0, w = (meleeRand(seed + q * 37) - 0.5) * 0.7, bounced = 0, rest = false;
+      const cy0 = (yb(c, r) + yb(c, r + 1)) / 2, cx0 = (xb(r, c) + xb(r, c + 1)) / 2;
+      const floorDy = FLOOR - 5 - (by0 + cy0);
+      for (let i = 0; i < dt && !rest; i++) {
+        px += vxp; vyp += 0.13; py += vyp; rot += w;
+        if (py > floorDy) { py = floorDy; if (bounced < 2 && Math.abs(vyp) > 0.8) { vyp = -vyp * 0.42; vxp *= 0.6; w *= 0.5; bounced++; } else { rest = true; } }
+      }
+      ctx.save();
+      ctx.translate(bx0 + cx0 + px, by0 + cy0 + py); ctx.rotate(rot); ctx.scale(2, 2); ctx.translate(-(bx0 + cx0), -(by0 + cy0));
+      ctx.beginPath();
+      ctx.moveTo(bx0 + xb(r, c), by0 + yb(c, r)); ctx.lineTo(bx0 + xb(r, c + 1), by0 + yb(c, r));
+      ctx.lineTo(bx0 + xb(r, c + 1), by0 + yb(c, r + 1)); ctx.lineTo(bx0 + xb(r, c), by0 + yb(c, r + 1)); ctx.closePath(); ctx.clip();
+      drawSprite(fig, bx0, by0, { flipX: true, player: 1 });
+      ctx.restore();
+    }
+    const BC = ['#ff1e1e', '#c40d0d', '#8f0a0a', '#ff5a3c'];
+    for (let k = 0; k < 320; k++) {
+      const st = (k * 3) % 44, d = dt - st; if (d < 0) continue;
+      const ang2 = (meleeRand(seed + k * 7717)) * Math.PI * 2, spd = 1.0 + meleeRand(seed + k * 3331) * 3.8;
+      let bx = ex, by = ey, bvx = Math.cos(ang2) * spd, bvy = Math.sin(ang2) * spd - 0.8;
+      for (let i = 0; i < d; i++) { bx += bvx; bvy += 0.1; by += bvy; if (by >= FLOOR + 1) { by = FLOOR + 1; break; } }
+      if (bx < 1 || bx > PLAYFIELD_W - 3) continue;
+      ctx.fillStyle = BC[k & 3]; ctx.fillRect(Math.round(bx), Math.round(by), 2, 1 + (k & 1));
+    }
+    // blood on the lens: splats that slide down the glass
+    for (let k = 0; k < 24; k++) {
+      const d2 = dt - (k % 8) * 3; if (d2 < 0) continue;
+      const sx2 = 6 + meleeRand(seed + k * 911) * (PLAYFIELD_W - 12), sy2 = 8 + meleeRand(seed + k * 577) * (PLAYFIELD_H - 40), rr = Math.min(1, d2 / 6) * (4 + meleeRand(seed + k * 131) * 9);
+      ctx.fillStyle = (k & 1) ? 'rgba(170,10,10,0.8)' : 'rgba(120,6,6,0.85)';
+      ctx.beginPath(); ctx.arc(sx2, sy2, rr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillRect(Math.round(sx2 - 1), Math.round(sy2), 2, Math.min(34, Math.round(d2 * 0.35)) * (meleeRand(seed + k * 17) > 0.4 ? 1 : 0));
+    }
+  }
+  // the big shield stamps the screen
+  if (t >= SL) {
+    const e = Math.min(1, (t - SL) / 6), sc = 9 - 3.6 * e + Math.sin(t / 7) * 0.08 * e;
+    ctx.save(); ctx.globalAlpha = 0.25 + 0.4 * e; ctx.translate(80, 98); ctx.rotate(Math.sin(t / 11) * 0.05); ctx.scale(sc, sc);
+    ctx.drawImage(meleeCanvas(SHIELD_ID), -sp.w / 2, -sp.h / 2); ctx.restore();
+    if (t >= SL + 5) {                                           // cracks in the glass
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1;
+      for (let j = 0; j < 12; j++) {
+        let cx = 80, cy = 98, an = (j / 12) * Math.PI * 2 + meleeRand(seed + j) * 0.4;
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        const L = Math.min(8, Math.floor((t - SL - 5) / 1.2));
+        for (let s = 0; s < L; s++) { an += (meleeRand(seed + j * 29 + s) - 0.5) * 0.7; cx += Math.cos(an) * 11; cy += Math.sin(an) * 11; ctx.lineTo(cx, cy); }
+        ctx.stroke();
+      }
+    }
+  }
+  // confetti, in police colours plus rainbow
+  for (let k = 0; k < 150; k++) {
+    const o = k % 3, d = t - (te + o * 25); if (d < 0 || d > 200) continue;
+    const ox = o === 0 ? sim.path[sim.te].x : (o === 1 ? 36 : 124), oy = o === 0 ? sim.path[sim.te].y : 56;
+    const an = meleeRand(seed + k * 7919) * Math.PI * 2, spd = 0.7 + meleeRand(seed + k * 104729) * 2.3;
+    const cx2 = ox + Math.cos(an) * spd * d, cy2 = oy + Math.sin(an) * spd * d * 0.8 + 0.03 * d * d;
+    if (cx2 < 1 || cx2 > PLAYFIELD_W - 3 || cy2 < 1 || cy2 > FLOOR) continue;
+    ctx.fillStyle = (k % 5 === 0) ? '#ff2a2a' : ((k % 5 === 1) ? '#2a5bff' : TREE_COLORS[(k + (d >> 3)) % 8]); ctx.fillRect(Math.round(cx2), Math.round(cy2), 2 + (k & 1), 3);
+  }
+  // flashes + red/blue frame
+  let fl = 0;
+  if (t >= SH_HIT - 1 && t < SH_HIT + 3) fl = 0.9;
+  if (t >= te - 1 && t < te + 3) fl = 0.9;
+  if (t >= SL && t < SL + 3) fl = 0.7;
+  for (let k = 0; k < sim.ev.length; k++) if (t === SH_T0 + sim.ev[k].i) fl = Math.max(fl, 0.3);
+  if (fl) { ctx.fillStyle = 'rgba(255,255,255,' + fl + ')'; ctx.fillRect(0, 0, PLAYFIELD_W, PLAYFIELD_H); }
+  if (t >= SH_HIT) for (let i = 0; i < 2; i++) { ctx.fillStyle = ((t >> 3) + i) & 1 ? '#ff2a2a' : '#2a5bff'; ctx.fillRect(0, i * (PLAYFIELD_H - 2), PLAYFIELD_W, 2); ctx.fillRect(i * (PLAYFIELD_W - 2), 0, 2, PLAYFIELD_H); }
+  // banners
+  if (t >= 6) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(4, 14, PLAYFIELD_W - 8, 50);
+    if (t < 110) { cueBigText('ULTRA', 18, t, true); cueBigText('SUPERKILL!', 34, t, true); drawCenter(sp.n, 52, COLOR.white); }
+    else if (t < 205) { cueBigText('COLVIN', 18, t, true); cueBigText('SMASH!', 34, t, true); drawCenter('COLVIN MODE', 52, '#ffd23f'); }
+    else { cueBigText(p1Name ? p1Name + ' WINS!' : (mode === 1 ? 'YOU WIN!' : 'P1 WINS!'), 20, t, false); drawCenter((variant === 'arcade' && mode === 1) ? 'STAGE CLEAR' : 'GAME OVER', 42, COLOR.white); }
+  }
+  ctx.restore();
+}
+function finShake(m) {                     // screen-shake amplitude for the two game-ending finales
+  const t = m.t;
+  if (m.id !== SHIELD_ID) return t < 80 ? 4 * (1 - t / 80) : 0;
+  let a = 0;
+  if (t >= SH_HIT && t < SH_HIT + 60) a = 6 * (1 - (t - SH_HIT) / 60);
+  const s = shieldSim(m.seed), te = SH_T0 + s.te;
+  for (let k = 0; k < s.ev.length; k++) { const d = t - (SH_T0 + s.ev[k].i); if (d >= 0 && d < 10) a = Math.max(a, 2.5 * (1 - d / 10)); }
+  if (t >= te && t < te + 40) a = Math.max(a, 7 * (1 - (t - te) / 40));
+  if (t >= te + 16 && t < te + 41) a = Math.max(a, 7 * (1 - (t - te - 16) / 25));
+  return a;
 }
 function checkMelee() {
   if (melee || struck[0] || struck[1]) return;
   const a = players[0], b = players[1];
-  if (rectsOverlap(a.x, a.y, FIG_W, FIG_H, b.x, b.y, FIG_W, FIG_H)) triggerMelee();
+  if (rectsOverlap(a.x, a.y, FIG_W, FIG_H, b.x, b.y, FIG_W, FIG_H)) { triggerMelee(); return; }
+  if (colvin) { const r = shieldRect(); if (rectsOverlap(r.x, r.y, r.w, r.h, b.x, b.y, FIG_W, FIG_H)) triggerMelee(); }   // the shield itself is a weapon
 }
 
 // ------------------------------------------------------------------
@@ -2371,13 +2687,13 @@ function drawCueFinale(m) {
     ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(4, 14, PLAYFIELD_W - 8, 50);
     if (t < 110) { cueBigText('ULTRA', 18, t, true); cueBigText('SUPERKILL!', 34, t, true); drawCenter(sp.n, 52, COLOR.white); }
     else if (t < 205) { cueBigText('POOL CUE', 20, t, true); drawCenter('CLEARED THE TABLE', 42, '#ffd23f'); }
-    else { cueBigText(mode === 1 ? 'YOU WIN!' : 'P1 WINS!', 20, t, false); drawCenter((variant === 'arcade' && mode === 1) ? 'STAGE CLEAR' : 'GAME OVER', 42, COLOR.white); }
+    else { cueBigText(p1Name ? p1Name + ' WINS!' : (mode === 1 ? 'YOU WIN!' : 'P1 WINS!'), 20, t, false); drawCenter((variant === 'arcade' && mode === 1) ? 'STAGE CLEAR' : 'GAME OVER', 42, COLOR.white); }
   }
   ctx.restore();
 }
 function drawMelee() {
   const m = melee; if (!m) return;
-  if (m.fin) { drawCueFinale(m); return; }
+  if (m.fin) { if (m.id === SHIELD_ID) drawShieldFinale(m); else drawCueFinale(m); return; }
   const t = m.t, sp = MELEE_SPRITES[m.id], a = players[0], v = players[1];
   const dir = (v.x >= a.x) ? 1 : -1;
   // weapon in red's hand: pops in, swings through at the victim, then is held up in triumph
@@ -2542,6 +2858,7 @@ function updateBullets() {
       b.ric = (b.ric || 0) + 1;
       sfx('bounce');
     }
+    if (colvin) shieldDeflect(b);                      // COLVIN MODE: riot shield bounces P2's bullets back, faster
     // Stage 3: deflect off scenery first; otherwise check the opposing figure
     if (!deflectOffObstacles(b)) {
       const victim = bulletHitPlayer(b);
@@ -2650,7 +2967,7 @@ function drawPlay() {
   drawHud();                      // Stage 6: strip above the playfield (untranslated)
   ctx.save();
   ctx.translate(0, HUD_H);        // Stage 6: all playfield drawing sits below the HUD
-  if (melee && melee.fin && melee.t < 80) { const am = 4 * (1 - melee.t / 80); ctx.translate(Math.round((meleeRand(melee.t * 3 + 1) - 0.5) * 2 * am), Math.round((meleeRand(melee.t * 3 + 2) - 0.5) * 2 * am)); }
+  if (melee && melee.fin && finShake(melee) > 0) { const am = finShake(melee); ctx.translate(Math.round((meleeRand(melee.t * 3 + 1) - 0.5) * 2 * am), Math.round((meleeRand(melee.t * 3 + 2) - 0.5) * 2 * am)); }
   // 1 px outline so the clamp bounds are visible (remove if unwanted)
   ctx.fillStyle = COLOR.border;
   ctx.fillRect(0, 0, PLAYFIELD_W, 1);
@@ -2662,9 +2979,10 @@ function drawPlay() {
 
   // Stage 3: struck figures play the spin-and-fall animation (replaces the old blink)
   for (let i = 0; i < 2; i++) {
-    if (struck[i]) { if (i === 1 && melee && melee.fin && melee.t >= CUE_CUT) continue; drawStruckFigure(i); continue; }
+    if (struck[i]) { if (i === 1 && melee && melee.fin && melee.t >= (melee.id === SHIELD_ID ? SH_HIT : CUE_CUT)) continue; drawStruckFigure(i); continue; }
     const p = players[i];
     drawSprite(pickFigureSprite(i), p.x, p.y, { flipX: i === 1, player: i });
+    if (i === 0 && colvin && !melee) drawShield(p);
   }
   drawBullets();
   drawMelee();
@@ -2797,6 +3115,7 @@ function drawBanner() {
   ctx.fillStyle = COLOR.black;
   ctx.fillRect(x - 3, y - 3, w + 6, GLYPH_H + 6);
   drawText(text, x, y, COLOR.white);
+  if (colvin) { const cm = 'COLVIN MODE', cw = textWidth(cm); ctx.fillStyle = COLOR.black; ctx.fillRect(Math.floor((PLAYFIELD_W - cw) / 2) - 3, y - 17, cw + 6, GLYPH_H + 6); drawText(cm, Math.floor((PLAYFIELD_W - cw) / 2), y - 14, (roundStateTimer >> 3) & 1 ? '#ff2a2a' : COLOR.white); }
 }
 
 function drawPopups() {
@@ -2817,7 +3136,7 @@ function centerBox(lines, h) {
 }
 
 function drawMatchOverClassic() {
-  const who = (mode === 1) ? (winningIndex === 0 ? 'YOU WIN' : 'PLAYER 2 WINS') : 'P' + (winningIndex + 1) + ' WINS';
+  const who = (winningIndex === 0 && p1Name) ? p1Name + ' WINS' : ((mode === 1) ? (winningIndex === 0 ? 'YOU WIN' : 'PLAYER 2 WINS') : 'P' + (winningIndex + 1) + ' WINS');
   centerBox([{ t: 'MATCH OVER', c: COLOR.white },
              { t: who, c: PLAYER_BODY[winningIndex] },
              { t: scores[0] + ' - ' + scores[1], c: COLOR.cyan }], 29);
@@ -3011,10 +3330,11 @@ function updateReplay() {
 
 // Small ENGINE QR, shown only inside exported kill-reel captures. 33x33 incl. 2-module quiet zone, 1 logical px per module.
 const ENGINE_QR = ['000000000','000000000','07f273dfc','0414c9504','05d7db574','05d3b9974','05d415174','04168bd04','07f5555fc','000643c00','06991c9d8','0205ac524','06f325af8','03c02de18','03d076f2c','020debc00','01f47233c','006a76ca8','0510baa88','02a1121a4','05fe2154c','0089a2ecc','06b2dcfd0','0006e7c5c','07f6f4548','0413e9478','05d19e7c0','05d5b29f8','05d2b5a74','041586e08','07f46b4e8','000000000','000000000'];
+const CREDIT_COL = '#ffd23f';   // QR paper and the CAPTURES COURTESY text share this exact color, so they read as one unit
 function drawEngineQR(x0, y0) {
   const n = ENGINE_QR.length;
-  ctx.fillStyle = '#d9d2bf'; ctx.fillRect(x0, y0, n, n);
-  ctx.fillStyle = '#14110c';
+  ctx.fillStyle = CREDIT_COL; ctx.fillRect(x0, y0, n, n);
+  ctx.fillStyle = '#000000';
   for (let r = 0; r < n; r++) {
     const bits = parseInt(ENGINE_QR[r], 16).toString(2).padStart(n, '0');
     for (let c = 0; c < n; c++) if (bits[c] === '1') ctx.fillRect(x0 + c, y0 + r, 1, 1);
@@ -3023,11 +3343,11 @@ function drawEngineQR(x0, y0) {
 function drawReplay() {
   fillBlack();
   const blink = (Math.floor(hs.t / 15) % 2 === 0);
-  const who = (mode === 1) ? (winningIndex === 0 ? 'YOU WIN' : 'PLAYER 2 WINS') : 'P' + (winningIndex + 1) + ' WINS';
+  const who = (winningIndex === 0 && p1Name) ? p1Name + ' WINS' : ((mode === 1) ? (winningIndex === 0 ? 'YOU WIN' : 'PLAYER 2 WINS') : 'P' + (winningIndex + 1) + ' WINS');
   const col = PLAYER_BODY[winningIndex < 0 ? 0 : winningIndex];
   drawCenter('MATCH OVER', 40, COLOR.white);
   drawCenter(who, 62, col);
-  drawCenter((mode === 1 ? 'YOU ' : 'P1 ') + scores[0], 80, PLAYER_BODY[0]);
+  drawCenter((p1Name ? p1Name + ' ' : (mode === 1 ? 'YOU ' : 'P1 ')) + scores[0], 80, PLAYER_BODY[0]);
   drawCenter((mode === 1 ? 'P2 ' : 'P2 ') + scores[1], 91, PLAYER_BODY[1]);
   drawCenter('HEADSHOTS  ' + headshots[0] + ' - ' + headshots[1], 106, '#ffd23f');
   drawCenter('CAREER HEADSHOTS ' + careerHeads, 117, '#9a9a9a');
@@ -3149,7 +3469,7 @@ function drawHiscoreA() {
   if (hs.phase === 'INIT') {
     const who = hs.cands[hs.ci];
     const pc = PLAYER_BODY[who];
-    drawCenter((mode === 1 ? 'YOU' : 'P' + (who + 1)) + ' NEW HIGH SCORE', 26, pc);
+    drawCenter(((who === 0 && p1Name) ? p1Name : (mode === 1 ? 'YOU' : 'P' + (who + 1))) + ' NEW HIGH SCORE', 26, pc);
     drawCenter(pad5(points[who]), 37, COLOR.white);
     drawCenter('ENTER YOUR INITIALS', 50, COLOR.cyan);
     const sc = 3, cw = GLYPH_W * sc, sp = 8, total = 3 * cw + 2 * sp;
@@ -3167,7 +3487,7 @@ function drawHiscoreA() {
     drawCenter('UP DOWN LETTER  ENTER OK', 190, '#888888');
   } else {
     if (hs.cands.length === 0 && points[0] + points[1] > 0) {
-      const l1 = (mode === 1 ? 'YOU ' : 'P1 ') + pad5(points[0]);
+      const l1 = (p1Name ? p1Name + ' ' : (mode === 1 ? 'YOU ' : 'P1 ')) + pad5(points[0]);
       drawCenter(l1, 134, PLAYER_BODY[0]);
       if (mode === 2) drawCenter('P2 ' + pad5(points[1]), 145, PLAYER_BODY[1]);
     }
@@ -3206,7 +3526,7 @@ function takeSnap() {
   if (!reel.obs || reel.obsRound !== roundNumber) { reel.obs = cl(obstacles); reel.obsRound = roundNumber; }
   const sn = { p: cl(players), b: cl(bullets), o: reel.obs, st: struck.slice(), sc: scores.slice(), pt: points.slice(),
                lv: lives.slice(), am: ammo.slice(), sk: streak.slice(), rs: roundState, rt: roundStateTimer, he: hitElapsed,
-               rn: roundNumber, tf: (treeFlashFrames >= TREE_FLASH_FRAMES) ? treeFlashColor : null, ev: stepEvents, ml: melee ? { id: melee.id, t: melee.t, seed: melee.seed, fin: melee.fin } : null };
+               rn: roundNumber, tf: (treeFlashFrames >= TREE_FLASH_FRAMES) ? treeFlashColor : null, ev: stepEvents, ml: melee ? { id: melee.id, t: melee.t, seed: melee.seed, fin: melee.fin } : null, cv: colvin };
   stepEvents = [];
   return sn;
 }
@@ -3217,7 +3537,7 @@ function applySnap(sn) {
   obstacles.length = 0; sn.o.forEach(function (o) { obstacles.push(o); });
   for (let i = 0; i < 2; i++) { struck[i] = sn.st[i]; scores[i] = sn.sc[i]; points[i] = sn.pt[i]; lives[i] = sn.lv[i]; ammo[i] = sn.am[i]; streak[i] = sn.sk[i]; }
   roundState = sn.rs; roundStateTimer = sn.rt; hitElapsed = sn.he; roundNumber = sn.rn;
-  melee = sn.ml ? Object.assign({}, sn.ml) : null;
+  melee = sn.ml ? Object.assign({}, sn.ml) : null; colvin = !!sn.cv;
 }
 
 function recordStep() {
@@ -3345,7 +3665,7 @@ function updateReel() {
 }
 
 function reelLabel(c) {
-  if (c.melee) return c.melee === 'POOL CUE' ? 'ULTRA SUPERKILL' : 'SUPERKILL';
+  if (c.melee) return c.melee === 'POOL CUE' ? 'ULTRA SUPERKILL' : (c.melee === 'RIOT SHIELD' ? 'COLVIN SMASH' : 'SUPERKILL');
   if (c.head) return (c.tree || c.wall) ? 'TRICK HEADSHOT' : 'HEADSHOT';
   if (c.self) return 'OWN GOAL';
   if (c.rating >= 6) return 'INSANE SHOT';
@@ -3411,12 +3731,12 @@ function drawReel() {
   // caption strip
   const sh = reel.exporting ? 36 : 32, sy = TOTAL_H - sh;
   ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, sy, PLAYFIELD_W, sh);
-  const who = (mode === 1) ? 'YOU' : 'P' + (c.owner + 1);
+  const who = (c.owner === 0 && p1Name) ? p1Name : ((mode === 1) ? 'YOU' : 'P' + (c.owner + 1));
   if (reel.exporting) {                      // captures carry the credit line and the QR (left block + QR on the right)
     const mid = 62, line = function (t, y, col) { drawText(t, Math.floor(mid - textWidth(t) / 2), y, col); };
-    line('KILL ' + (reel.cur + 1) + ' OF ' + reel.order.length + ' BY ' + who, sy + 5, PLAYER_BODY[c.owner]);
+    line(who + ' KILL ' + (reel.cur + 1), sy + 5, PLAYER_BODY[c.owner]);
     line('SHOWDOWN IN 2026 AD', sy + 16, COLOR.white);
-    line('CAPTURES COURTESY', sy + 26, COLOR.tan);
+    line('CAPTURES COURTESY', sy + 26, CREDIT_COL);
     drawEngineQR(PLAYFIELD_W - 34, TOTAL_H - 34);
   } else {
     drawCenter('KILL ' + (reel.cur + 1) + ' OF ' + reel.order.length + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
@@ -3632,7 +3952,7 @@ function update() {
   else if (screen === SCREEN_PLAY) { updatePlay(); recordStep(); }
   else if (screen === SCREEN_REEL) updateReel();
   // Reset to the SELECT GAME screen, like the console powering up
-  if (screen !== SCREEN_BOOT && screen !== SCREEN_TITLE && screen !== SCREEN_REEL && !(screen === SCREEN_HISCORE && variant === 'arcade' && hs.phase === 'INIT') && (keysPressedThisStep.has('KeyR') || padEdge.back)) setScreen(SCREEN_SELECT);
+  if (screen !== SCREEN_BOOT && screen !== SCREEN_TITLE && screen !== SCREEN_REEL && !(screen === SCREEN_HISCORE && variant === 'arcade' && hs.phase === 'INIT') && ((keysPressedThisStep.has('KeyR') && !(screen === SCREEN_CONTROLS && ctl.editing)) || padEdge.back)) setScreen(SCREEN_SELECT);
   keysPressedThisStep.clear();
 }
 
@@ -3686,7 +4006,7 @@ function boot() {
   window.addEventListener('keydown', function (e) {
     const isStartKey = (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Numpad1' || e.code === 'Numpad2');
     audioUnlock(!isStartKey && e.code !== 'KeyM' ? true : false);
-    if (e.code === 'KeyM' && !e.repeat) { toggleMute(); if (audioCtx && screen === SCREEN_SELECT) musicStart(); }
+    if (e.code === 'KeyM' && !e.repeat && !(screen === SCREEN_CONTROLS && ctl.editing)) { toggleMute(); if (audioCtx && screen === SCREEN_SELECT) musicStart(); }
   });
   window.addEventListener('pointerdown', function () { bootPoke = true; audioUnlock(screen !== SCREEN_BOOT); });
   loadEffects();     // Stage 5: restore saved effect toggles (defaults if none)

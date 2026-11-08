@@ -1579,11 +1579,18 @@ function touchPause(on) {
   if (!on) { lastTime = 0; accumulator = 0; }
 }
 function touchAutoPause() { if (touch.enabled && screen === SCREEN_PLAY && !touch.paused) touchPause(true); }
-function touchJoyKeys(c) {                       // the stick drives player 1 like the keyboard's 8 directions
+const joyAcc = { x: 0, y: 0 };
+function touchJoyKeys(c) {                       // the stick is analog: speed follows how far it is pushed; near-straight pushes snap to the axis
   if (!touch.enabled || screen !== SCREEN_PLAY || touch.paused) return;
-  const j = touch.joy, T = 0.34;
-  if (j.x < -T) c.left = true; if (j.x > T) c.right = true; if (j.y < -T) c.up = true; if (j.y > T) c.down = true;
-  if (c.left || c.right || c.up || c.down) { delete c.ax; delete c.ay; }
+  const j = touch.joy, mag = Math.hypot(j.x, j.y);
+  if (mag < 0.1) { joyAcc.x = 0; joyAcc.y = 0; return; }
+  const m = Math.min(1, (mag - 0.1) / 0.5);       // full speed by about 60% of the stick's travel
+  let ux = j.x / mag, uy = j.y / mag;
+  if (Math.abs(uy) < 0.42) uy = 0; else if (Math.abs(ux) < 0.42) ux = 0;   // within ~25 degrees of an axis: go straight, no drift
+  joyAcc.x += ux * m * MOVE_SPEED * 1.2; joyAcc.y += uy * m * MOVE_SPEED * 1.2;
+  const ax = Math.max(-MOVE_SPEED, Math.min(MOVE_SPEED, Math.trunc(joyAcc.x))), ay = Math.max(-MOVE_SPEED, Math.min(MOVE_SPEED, Math.trunc(joyAcc.y)));
+  joyAcc.x -= Math.trunc(joyAcc.x); joyAcc.y -= Math.trunc(joyAcc.y);
+  c.left = c.right = c.up = c.down = false; c.ax = ax; c.ay = ay;
 }
 function touchUIUpdate() {
   if (!touch.enabled) return;

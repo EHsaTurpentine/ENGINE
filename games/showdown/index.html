@@ -1399,6 +1399,7 @@ function mouseController(c) {
 function readHumanController(index) {
   const c = readKeyboardController(index);
   if (index === 0) mouseController(c);
+  if (index === 0 && control !== 'pad' && pads[0] && (pads[0].left || pads[0].right || pads[0].up || pads[0].down || pads[0].fireEdge)) setControl('pad');   // using the controller in a match means CONTROLLER, whatever the menu says
   const g = ((index === 0 && control === 'pad') || (index === 1 && mode === 2)) ? pads[index] : null;
   if (g) {
     c.left  = c.left  || g.left;
@@ -1959,6 +1960,7 @@ function startGame(chosenMode, v) {
 // ------------------------------------------------------------------
 function updateSelect() {
   if (select.phase === SELECT_IDLE) {
+    select.viaPad = !!(padEdge.a || padEdge.b || padEdge.start);        // chose with the controller: offer CONTROLLER next
     if (keysPressedThisStep.has('Digit1') || keysPressedThisStep.has('Numpad1') || padEdge.a || padEdge.start) {
       select.phase = SELECT_CHOOSE;
       select.choice = 1; select.v = 'classic'; select.shown = '1';
@@ -1994,7 +1996,7 @@ const CTL_Y0 = 129, CTL_STEP = 22, CTL_H = 19, CTL_BEAT = 32;
 const ctl = { sel: 0, t: 0, phase: 'idle', countdown: 0, pend: { choice: 1, v: 'classic' }, padUp: false, padDown: false };
 function openControls(choice, v) {
   ctl.pend = { choice: choice, v: v };
-  ctl.sel = Math.max(0, CTRL_LIST.indexOf(control));
+  ctl.sel = select.viaPad ? 2 : Math.max(0, CTRL_LIST.indexOf(control));
   ctl.t = 0; ctl.phase = 'idle'; ctl.countdown = 0; ctl.padUp = ctl.padDown = false;
   screen = SCREEN_CONTROLS;
   updateMouseCursor();
@@ -2632,6 +2634,7 @@ function drawSelect() {
     drawGlyphScaled(L.ch, tx + i * adv, ty, L.col, sc);
     drawGlyphScaled(L.ch, tx + i * adv + 1, ty, L.col, sc);
   }
+  if (select.phase === SELECT_IDLE) drawCenter('1P? PRESS 1', ty + GLYPH_H * sc + 14, COLOR.tan);
   // The chosen number appears once a game has been picked, as on the original
   if (select.phase === SELECT_CHOOSE) {
     const ch = select.shown || String(select.choice);

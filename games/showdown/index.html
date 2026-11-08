@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>SHOWDOWN IN 2026 AD</title>
 <style>
   html, body {
@@ -26,10 +26,36 @@
      visible canvas and shown only while at least one effect is active. */
   #stage    { position: relative; line-height: 0; }
   #screenGL { position: absolute; left: 0; top: 0; display: none; }
+  /* touch controls */
+  body.touch { height: 100dvh; box-sizing: border-box; touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  html:has(body.touch) { overscroll-behavior: none; }
+  #tui { display: none; position: fixed; z-index: 10; gap: 10px; touch-action: none; }
+  body.touch #tui { display: flex; }
+  .tb { font: 700 15px/1 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 1px; color: #f6f2e8; background: #1b1610; border: 2px solid #8a6a50; border-radius: 10px; padding: 14px 16px; min-width: 56px; touch-action: none; -webkit-user-select: none; user-select: none; }
+  .tb.dn { background: #f0541e; color: #000; transform: scale(0.96); }
+  .tb.go { border-color: #ffd23f; color: #ffd23f; }
+  .tb.reel { border-color: #33e0e0; color: #33e0e0; }
+  .tb.sq { padding: 14px 0; width: 54px; min-width: 0; }
+  .tb.small { padding: 10px 12px; font-size: 12px; opacity: 0.85; }
+  .tb.fire { width: 104px; height: 104px; border-radius: 50%; font-size: 20px; color: #fff; background: #b8281c; border: 4px solid #ffd23f; box-shadow: 0 0 0 3px #000, 0 4px 0 4px #6b150e; }
+  .tb.fire.dn { background: #ff5a3c; }
+  .tb.pulse { animation: tbp 0.9s ease-in-out infinite; }
+  @keyframes tbp { 50% { background: #3a2f12; } }
+  @media (orientation: portrait) {
+    body.touch { padding-bottom: 170px; }
+    #tui { left: 0; right: 0; bottom: 0; padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); flex-wrap: wrap; justify-content: center; align-items: center; }
+    #tui .fire { margin-left: auto; }
+  }
+  @media (orientation: landscape) {
+    body.touch { padding-right: 180px; }
+    #tui { top: 0; bottom: 0; right: 0; width: 160px; flex-direction: column; justify-content: center; align-items: stretch; padding: 8px calc(10px + env(safe-area-inset-right)) 8px 0; }
+    #tui .fire { align-self: center; }
+  }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="screen"></canvas><canvas id="screenGL"></canvas></div>
+<div id="tui"></div>
 
 <script>
 'use strict';
@@ -716,9 +742,19 @@ let obstacleRng = null;                 // mulberry32 stream (seeded per match)
 function setupCanvas() {
   const availW = Math.max(320, window.innerWidth  - 16);
   const availH = Math.max(240, window.innerHeight - 16);
-  intScale = Math.max(1, Math.floor(Math.min(availW / PLAYFIELD_W, availH / TOTAL_H)));
-  canvas.width  = PLAYFIELD_W * intScale;
-  canvas.height = TOTAL_H * intScale;
+  if (typeof touch !== 'undefined' && touch.enabled) {         // phones: whole-device-pixel scale so the pixels stay crisp, leaving room for the buttons
+    const port = window.innerHeight >= window.innerWidth, dpr = window.devicePixelRatio || 1;
+    const aw = port ? window.innerWidth - 8 : window.innerWidth - 190, ah = port ? window.innerHeight - 180 : window.innerHeight - 8;
+    intScale = Math.max(1, Math.floor(Math.min(aw * dpr / PLAYFIELD_W, ah * dpr / TOTAL_H)));
+    canvas.width = PLAYFIELD_W * intScale; canvas.height = TOTAL_H * intScale;
+    canvas.style.width = (canvas.width / dpr) + 'px'; canvas.style.height = (canvas.height / dpr) + 'px';
+    glCanvas.style.width = canvas.style.width; glCanvas.style.height = canvas.style.height;
+  } else {
+    intScale = Math.max(1, Math.floor(Math.min(availW / PLAYFIELD_W, availH / TOTAL_H)));
+    canvas.width  = PLAYFIELD_W * intScale;
+    canvas.height = TOTAL_H * intScale;
+    canvas.style.width = ''; canvas.style.height = ''; glCanvas.style.width = ''; glCanvas.style.height = '';
+  }
   glCanvas.width  = canvas.width;
   glCanvas.height = canvas.height;
   displayCtx.imageSmoothingEnabled = false;   // nearest-neighbor upscale of the 160x200 game canvas
@@ -1423,6 +1459,126 @@ function initMouse() {
     else if (screen === SCREEN_HISCORE) keysPressedThisStep.add('Digit1');                // click = REPLAY GAME
   });
   window.addEventListener('contextmenu', function (e) { if (mouse.on && screen === SCREEN_PLAY) e.preventDefault(); });
+}
+
+// ------------------------------------------------------------------
+// TOUCH CONTROLS (phones and tablets). A touchscreen is sensed on load ((pointer: coarse)) or on the first touch.
+// Drag anywhere to slide the cowboy (relative, so a thumb never hides him), FIRE button, tappable menus, and
+// buttons for the kill reel so players can save and share their GIFs and videos from the share sheet.
+// ------------------------------------------------------------------
+const touch = { enabled: false, id: -1, sx: 0, sy: 0, tx0: 0, ty0: 0, gain: 1.3, pending: null, sig: '', sure: 0, tick: 0 };
+const tuiEl = document.getElementById('tui');
+function touchEnable() {
+  if (touch.enabled) return;
+  touch.enabled = true; document.body.classList.add('touch');
+  CTL_ROWS[0] = { name: 'TOUCH', desc: 'DRAG MOVE + FIRE BUTTON' };
+  if (control !== 'mouse' && control !== 'pad') setControl('mouse');
+  setupCanvas();
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+}
+// Phones can't just "download": a share sheet (Save Image / Save Video / Messages...) needs a fresh tap, and encoding takes a while,
+// so on a touch device the finished file waits behind a SAVE / SHARE button.
+function deliverFile(blob, name) {
+  try {
+    if (touch.enabled && navigator.canShare && navigator.share) {
+      const f = new File([blob], name, { type: blob.type });
+      if (navigator.canShare({ files: [f] })) { touch.pending = { file: f, blob: blob, name: name }; return 'share'; }
+    }
+  } catch (e) { /* fall through to a plain download */ }
+  downloadBlob(blob, name); return 'download';
+}
+function touchShare() {
+  const p = touch.pending; if (!p) return;
+  let r; try { r = navigator.share({ files: [p.file], title: 'SHOWDOWN IN 2026 AD' }); } catch (e) { r = Promise.reject(e); }
+  r.then(function () { touch.pending = null; reel.msg = 'SAVED!'; reel.msgT = 200; })
+   .catch(function (e) { if (e && e.name === 'AbortError') return; downloadBlob(p.blob, p.name); touch.pending = null; reel.msg = 'SAVED TO DOWNLOADS'; reel.msgT = 200; });
+}
+function tuiKey(code) { return function () { keysPressedThisStep.add(code); }; }
+function touchButtons() {
+  const B = [];
+  const arrows = function () { B.push({ l: '▲', f: tuiKey('ArrowUp'), c: 'sq' }, { l: '▼', f: tuiKey('ArrowDown'), c: 'sq' }, { l: '◀', f: tuiKey('ArrowLeft'), c: 'sq' }, { l: '▶', f: tuiKey('ArrowRight'), c: 'sq' }, { l: 'OK', f: tuiKey('Enter'), c: 'go' }); };
+  if (screen === SCREEN_PLAY) {
+    B.push({ l: touch.sure > 0 ? 'SURE?' : 'MENU', f: function () { if (touch.sure > 0) { touch.sure = 0; keysPressedThisStep.add('KeyR'); } else touch.sure = 120; }, c: 'small' });
+    B.push({ l: 'FIRE', f: function () { if (control !== 'mouse') setControl('mouse'); mouse.fire = true; }, c: 'fire', hold: true });
+  } else if (screen === SCREEN_SELECT) {
+    B.push({ l: '1 PLAYER', f: tuiKey('Digit1'), c: 'go' });
+    if (arcadeUnlocked) B.push({ l: 'ARCADE', f: tuiKey('Digit3') });
+  } else if (screen === SCREEN_CONTROLS) {
+    if (ctl.editing) arrows();
+    else B.push({ l: 'BACK', f: tuiKey('Escape') }, { l: 'NAME', f: tuiKey('KeyN') }, { l: 'OK', f: tuiKey('Enter'), c: 'go' });
+  } else if (screen === SCREEN_HISCORE) {
+    if (hs.phase === 'INIT') arrows();
+    else {
+      B.push({ l: 'REPLAY', f: tuiKey('Digit1'), c: 'go' }, { l: 'MENU', f: tuiKey('Digit2') });
+      if (reelAvailable()) B.push({ l: 'KILL REEL', f: tuiKey('KeyK'), c: 'reel' });
+    }
+  } else if (screen === SCREEN_REEL) {
+    if (reel.encoding) { /* working */ }
+    else if (reel.exporting) B.push({ l: 'CANCEL', f: tuiKey('Escape') });
+    else {
+      if (touch.pending) B.push({ l: 'SAVE / SHARE', f: touchShare, c: 'go pulse' }, { l: 'DONE', f: function () { touch.pending = null; } });
+      B.push({ l: '◀', f: tuiKey('ArrowLeft'), c: 'sq' }, { l: '▶', f: tuiKey('ArrowRight'), c: 'sq' }, { l: 'AGAIN', f: tuiKey('Space') },
+             { l: 'SAVE GIF', f: tuiKey('KeyD'), c: touch.pending ? '' : 'go' }, { l: 'VIDEO', f: tuiKey('KeyV') }, { l: 'EXIT', f: tuiKey('Escape') });
+    }
+  }
+  return B;
+}
+function touchUIUpdate() {
+  if (!touch.enabled) return;
+  if (touch.sure > 0) touch.sure -= 1;
+  if (screen === SCREEN_PLAY && touch.id === -1 && players[0]) {          // no finger down: the pointer target is where the cowboy stands
+    mouse.x = players[0].x + FIG_W / 2; mouse.y = players[0].y + FIG_H / 2; mouse.has = true;
+  }
+  if ((touch.tick++ & 3) !== 0 && touch.sig) return;
+  const B = touchButtons();
+  const sig = B.map(function (b) { return b.l + '|' + (b.c || ''); }).join(',');
+  if (sig === touch.sig) return;
+  touch.sig = sig; tuiEl.innerHTML = '';
+  B.forEach(function (b) {
+    const e = document.createElement('button');
+    e.textContent = b.l; e.className = 'tb ' + (b.c || '');
+    e.addEventListener('pointerdown', function (ev) { ev.preventDefault(); ev.stopPropagation(); e.classList.add('dn'); b.f(); touch.tick = 3; });
+    const up = function () { e.classList.remove('dn'); };
+    e.addEventListener('pointerup', up); e.addEventListener('pointercancel', up); e.addEventListener('pointerleave', up);
+    tuiEl.appendChild(e);
+  });
+}
+function initTouch() {
+  try { if (window.matchMedia && matchMedia('(pointer: coarse)').matches) touchEnable(); } catch (e) { /* ignore */ }
+  window.addEventListener('pointerdown', function (e) {
+    if (e.pointerType !== 'touch') return;
+    if (e.target && e.target.closest && e.target.closest('#tui')) return;
+    touchEnable();
+    if (control !== 'mouse' && control !== 'pad') setControl('mouse');
+    mouseToLogical(e);
+    if (screen === SCREEN_SELECT) keysPressedThisStep.add('Digit1');                       // tap = 1 PLAYER
+    else if (screen === SCREEN_CONTROLS && !ctl.editing) { if (ctlHover()) keysPressedThisStep.add('Enter'); }   // tap a row to choose it
+    else if (screen === SCREEN_PLAY && touch.id === -1) {
+      const p = players[0];
+      touch.id = e.pointerId; touch.sx = e.clientX; touch.sy = e.clientY;
+      touch.tx0 = p ? p.x + FIG_W / 2 : mouse.x; touch.ty0 = p ? p.y + FIG_H / 2 : mouse.y;
+      mouse.x = touch.tx0; mouse.y = touch.ty0; mouse.has = true;
+    }
+  }, { passive: false });
+  window.addEventListener('pointermove', function (e) {
+    if (e.pointerType !== 'touch' || e.pointerId !== touch.id) return;
+    const r = (activePresentMode === 'gl' ? glCanvas : canvas).getBoundingClientRect();
+    const sc = r.width / PLAYFIELD_W; if (!sc) return;
+    mouse.x = Math.max(0, Math.min(PLAYFIELD_W, touch.tx0 + (e.clientX - touch.sx) / sc * touch.gain));
+    mouse.y = Math.max(0, Math.min(PLAYFIELD_H, touch.ty0 + (e.clientY - touch.sy) / sc * touch.gain));
+    mouse.has = true;
+  });
+  const end = function (e) { if (e.pointerId === touch.id) touch.id = -1; };
+  window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+  document.addEventListener('touchmove', function (e) { if (touch.enabled) e.preventDefault(); }, { passive: false });     // no scrolling or rubber-banding
+  document.addEventListener('gesturestart', function (e) { e.preventDefault(); });                                           // no pinch zoom
+  ['touchend', 'click'].forEach(function (n) { window.addEventListener(n, function () { audioUnlock(screen !== SCREEN_BOOT); }); });   // iOS only unlocks audio on these
+  window.addEventListener('orientationchange', function () { setTimeout(setupCanvas, 200); });
 }
 function mouseController(c) {
   if (!mouse.on || !mouse.has || roundState === ROUND_MATCH_OVER) { mouse.fire = false; return; }
@@ -2159,6 +2315,7 @@ function drawControls() {
   for (let i = 0; i < 4; i++) R(0, base + i * 2, PLAYFIELD_W, 1, band[3 - i]);
   if (ctl.pend.choice === 2 && ctl.pend.v !== 'arcade') ctlText('PLAYER 2: ARROWS + ENTER', base + 8, '#3366FF');
   const nk = (control === 'pad') ? 'Y' : 'N';
+  if (touch.enabled) { ctlText(p1Name ? 'PLAYER: ' + p1Name + '  TAP NAME' : 'TAP NAME TO NAME PLAYER', 209, p1Name ? COLOR.cyan : ((ctl.t >> 4) & 1 ? COLOR.white : COLOR.cyan)); ctlText('TAP A ROW OR OK', 217, '#8a6a50'); return; }
   if (p1Name) ctlText('PLAYER: ' + p1Name + '  ' + nk + ' CHANGE', 209, COLOR.cyan);
   else ctlText('PRESS ' + nk + ' TO NAME PLAYER', 209, (ctl.t >> 4) & 1 ? COLOR.white : COLOR.cyan);   // flashing, bright: easy to notice
   ctlText('ENTER OK   ESC BACK', 217, '#8a6a50');
@@ -2953,7 +3110,7 @@ function drawSelect() {
     drawGlyphScaled(L.ch, tx + i * adv, ty, L.col, sc);
     drawGlyphScaled(L.ch, tx + i * adv + 1, ty, L.col, sc);
   }
-  if (select.phase === SELECT_IDLE) drawCenter('PRESS 1 TO PLAY', TOTAL_H - 22, '#8a7a5a');
+  if (select.phase === SELECT_IDLE) drawCenter(touch.enabled ? 'TAP TO PLAY' : 'PRESS 1 TO PLAY', TOTAL_H - 22, '#8a7a5a');
   // The chosen number appears once a game has been picked, as on the original
   if (select.phase === SELECT_CHOOSE) {
     const ch = select.shown || String(select.choice);
@@ -3742,8 +3899,8 @@ function drawReel() {
     drawEngineQR(PLAYFIELD_W - 34, TOTAL_H - 34);
   } else {
     drawCenter('KILL ' + (reel.cur + 1) + ' OF ' + reel.order.length + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
-    drawCenter('ARROWS CLIP  SPACE AGAIN', sy + 13, COLOR.cyan);
-    drawCenter(reel.msgT > 0 ? reel.msg : 'D GIF  V VIDEO  ESC EXIT', sy + 23, reel.msgT > 0 ? '#ffd23f' : COLOR.cyan);
+    drawCenter(touch.enabled ? 'TAP ARROWS FOR CLIPS' : 'ARROWS CLIP  SPACE AGAIN', sy + 13, COLOR.cyan);
+    drawCenter(reel.msgT > 0 ? reel.msg : (touch.enabled ? 'SAVE GIF OR VIDEO BELOW' : 'D GIF  V VIDEO  ESC EXIT'), sy + 23, reel.msgT > 0 ? '#ffd23f' : COLOR.cyan);
   }
 }
 
@@ -3770,10 +3927,7 @@ function reelStartVideoExport() {
     reel.rec.onstop = function () {
       if (reel.discard) { reel.discard = false; return; }
       const blob = new Blob(reel.chunks, { type: reel.mime });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = 'SHOWDOWN_KILL_REEL.' + reel.ext;
-      document.body.appendChild(a); a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+      reel.msg = (deliverFile(blob, 'SHOWDOWN_KILL_REEL.' + reel.ext) === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED VIDEO TO DOWNLOADS'; reel.msgT = 260;
     };
     reel.title0 = document.title; document.title = 'REC - SAVING KILL REEL';
     reel.exporting = true; reel.discard = false;
@@ -3900,11 +4054,7 @@ function gifFinish() {
   setTimeout(function () {                              // let the screen show the message first
     try {
       const blob = gifEncode();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = 'SHOWDOWN_KILL_REEL.gif';
-      document.body.appendChild(a); a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-      reel.msg = 'SAVED GIF TO DOWNLOADS'; reel.msgT = 260;
+      reel.msg = (deliverFile(blob, 'SHOWDOWN_KILL_REEL.gif') === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED GIF TO DOWNLOADS'; reel.msgT = 260;
     } catch (e) {
       reel.msg = 'GIF FAILED'; reel.msgT = 200;
       reel.encoding = false; gifCap.frames = [];
@@ -3985,6 +4135,7 @@ function loop(now) {
     accumulator -= STEP_MS;
   }
   draw();
+  touchUIUpdate();
   if (gifCap.on) gifCapture();
   if (bootOpenT > 0) bootOpenT -= 1;
   updateTreeFlash();   // tree-shot screen flash timing (render frames)
@@ -4015,6 +4166,7 @@ function boot() {
   setupCanvas();
   initInput();
   initMouse();
+  initTouch(); setupCanvas();
   screen = SCREEN_BOOT;
   requestAnimationFrame(loop);
 }

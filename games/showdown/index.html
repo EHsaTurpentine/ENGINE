@@ -51,13 +51,26 @@
   .tb.fire.dn { background: #ff5a3c; }
   .tb.pulse { animation: tbp 0.9s ease-in-out infinite; }
   @keyframes tbp { 50% { background: #3a2f12; } }
+  #joy { display: none; position: fixed; z-index: 11; width: 150px; height: 150px; touch-action: none; -webkit-user-select: none; user-select: none; }
+  body.touch.joyon #joy { display: block; }
+  #joy .jb { position: absolute; inset: 0; border-radius: 50%; background: rgba(27,22,16,0.72); border: 3px solid #8a6a50; box-shadow: 0 0 0 3px #000; }
+  #joy .jb::before { content: ''; position: absolute; left: 50%; top: 14%; bottom: 14%; width: 2px; margin-left: -1px; background: rgba(138,106,80,0.55); }
+  #joy .jb::after { content: ''; position: absolute; top: 50%; left: 14%; right: 14%; height: 2px; margin-top: -1px; background: rgba(138,106,80,0.55); }
+  #joy .jk { position: absolute; left: 50%; top: 50%; width: 62px; height: 62px; margin: -31px 0 0 -31px; border-radius: 50%; background: #f0541e; border: 3px solid #ffd23f; box-shadow: 0 0 0 3px #000; z-index: 1; }
+  #pausebox { display: none; position: fixed; z-index: 12; left: 0; right: 0; top: 22%; text-align: center; font: 700 44px/1 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 6px; color: #ffd23f; text-shadow: 3px 3px 0 #000; pointer-events: none; }
+  #pausebox small { display: block; margin-top: 14px; font-size: 15px; letter-spacing: 2px; color: #f6f2e8; }
+  body.paused #pausebox { display: block; }
+  body.paused #stage { filter: brightness(0.35); }
   @media (orientation: portrait) {
     body.touch { padding-bottom: 170px; }
+    #joy { left: calc(14px + env(safe-area-inset-left)); bottom: calc(10px + env(safe-area-inset-bottom)); }
+    body.touch.joyon #tui { padding-left: 176px; justify-content: space-between; }
     #tui { left: 0; right: 0; bottom: 0; padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); flex-wrap: wrap; justify-content: center; align-items: center; }
     #tui .fire { margin-left: auto; }
   }
   @media (orientation: landscape) {
-    body.touch { padding-right: 180px; }
+    body.touch { padding-right: 180px; padding-left: 190px; }
+    #joy { left: calc(20px + env(safe-area-inset-left)); top: 50%; margin-top: -75px; }
     #tui { top: 0; bottom: 0; right: 0; width: 160px; flex-direction: column; justify-content: center; align-items: stretch; padding: 8px calc(10px + env(safe-area-inset-right)) 8px 0; }
     #tui .fire { align-self: center; }
   }
@@ -66,6 +79,8 @@
 <body>
 <div id="stage"><canvas id="screen"></canvas><canvas id="screenGL"></canvas></div>
 <div id="tui"></div>
+<div id="joy"><div class="jb"></div><div class="jk"></div></div>
+<div id="pausebox">PAUSED<small>TAP RESUME TO KEEP PLAYING</small></div>
 <div id="savebox"><div class="st"></div><div class="bar"><div class="fill"></div><div class="ind"></div></div><div class="sb"></div></div>
 
 <script>
@@ -755,7 +770,7 @@ function setupCanvas() {
   const availH = Math.max(240, window.innerHeight - 16);
   if (typeof touch !== 'undefined' && touch.enabled) {         // phones: whole-device-pixel scale so the pixels stay crisp, leaving room for the buttons
     const port = window.innerHeight >= window.innerWidth, dpr = window.devicePixelRatio || 1;
-    const aw = port ? window.innerWidth - 8 : window.innerWidth - 190, ah = port ? window.innerHeight - 180 : window.innerHeight - 8;
+    const aw = port ? window.innerWidth - 8 : window.innerWidth - 380, ah = port ? window.innerHeight - 180 : window.innerHeight - 8;
     intScale = Math.max(1, Math.floor(Math.min(aw * dpr / PLAYFIELD_W, ah * dpr / TOTAL_H)));
     canvas.width = PLAYFIELD_W * intScale; canvas.height = TOTAL_H * intScale;
     canvas.style.width = (canvas.width / dpr) + 'px'; canvas.style.height = (canvas.height / dpr) + 'px';
@@ -1222,14 +1237,15 @@ function musicStop() {
 }
 
 // Round-end sting: the opening of TAPS on a brassy bugle (G G C - G C E), as in the original's solemn salute
-function bugleNote(f, dur, delay) {
+function bugleNote(f, dur, delay, vol) {
+  const V = (vol === undefined) ? 0.5 : vol;
   if (!audioCtx || audioMuted) return;
   const t = audioCtx.currentTime + delay;
   const g = audioCtx.createGain(), lp = audioCtx.createBiquadFilter();
   lp.type = 'lowpass'; lp.frequency.value = 2200; lp.Q.value = 1.2;
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.linearRampToValueAtTime(0.5, t + 0.04);
-  g.gain.setValueAtTime(0.5, t + Math.max(0.05, dur - 0.14));
+  g.gain.linearRampToValueAtTime(V, t + 0.04);
+  g.gain.setValueAtTime(V, t + Math.max(0.05, dur - 0.14));
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
   lp.connect(g); g.connect(audioMaster);
   [['sawtooth', 0.55, 0], ['square', 0.3, 1.004]].forEach(function (c) {
@@ -1241,6 +1257,7 @@ function bugleNote(f, dur, delay) {
   });
 }
 function whistle() {
+  if (touch.enabled) { bugleNote(392, 0.10, 0, 0.2); bugleNote(523.25, 0.30, 0.12, 0.2); return; }   // phones: a short quiet sting, never the full TAPS
   const G = 392, C = 523.25, E = 659.25, k = 0.8;
   const seq = [[G, 0.30, 0], [G, 0.11, 0.32], [C, 0.95, 0.45], [G, 0.30, 1.55], [C, 0.11, 1.87], [E, 1.15, 2.00]];
   seq.forEach(function (n) { bugleNote(n[0], n[1] * k, n[2] * k); });
@@ -1477,12 +1494,12 @@ function initMouse() {
 // Drag anywhere to slide the cowboy (relative, so a thumb never hides him), FIRE button, tappable menus, and
 // buttons for the kill reel so players can save and share their GIFs and videos from the share sheet.
 // ------------------------------------------------------------------
-const touch = { enabled: false, id: -1, sx: 0, sy: 0, tx0: 0, ty0: 0, gain: 1.3, pending: null, sig: '', sure: 0, tick: 0 };
+const touch = { paused: false, joy: { x: 0, y: 0, id: -1 }, enabled: false, id: -1, sx: 0, sy: 0, tx0: 0, ty0: 0, gain: 1.3, pending: null, sig: '', sure: 0, tick: 0 };
 const tuiEl = document.getElementById('tui');
 function touchEnable() {
   if (touch.enabled) return;
   touch.enabled = true; document.body.classList.add('touch');
-  CTL_ROWS[0] = { name: 'TOUCH', desc: 'DRAG MOVE + FIRE BUTTON' };
+  CTL_ROWS[0] = { name: 'TOUCH', desc: 'JOYSTICK + FIRE BUTTON' };
   if (control !== 'mouse' && control !== 'pad') setControl('mouse');
   setupCanvas();
 }
@@ -1514,8 +1531,13 @@ function touchButtons() {
   const B = [];
   const arrows = function () { B.push({ l: '▲', f: tuiKey('ArrowUp'), c: 'sq' }, { l: '▼', f: tuiKey('ArrowDown'), c: 'sq' }, { l: '◀', f: tuiKey('ArrowLeft'), c: 'sq' }, { l: '▶', f: tuiKey('ArrowRight'), c: 'sq' }, { l: 'OK', f: tuiKey('Enter'), c: 'go' }); };
   if (screen === SCREEN_PLAY) {
-    B.push({ l: touch.sure > 0 ? 'SURE?' : 'MENU', f: function () { if (touch.sure > 0) { touch.sure = 0; keysPressedThisStep.add('KeyR'); } else touch.sure = 120; }, c: 'small' });
-    B.push({ l: 'FIRE', f: function () { if (control !== 'mouse') setControl('mouse'); mouse.fire = true; }, c: 'fire', hold: true });
+    if (touch.paused) {
+      B.push({ l: 'RESUME', f: function () { touchPause(false); }, c: 'go pulse' });
+      B.push({ l: touch.sure > 0 ? 'SURE?' : 'QUIT TO MENU', f: function () { if (touch.sure > 0) { touch.sure = 0; touchPause(false); keysPressedThisStep.add('KeyR'); } else touch.sure = 150; }, c: 'small' });
+    } else {
+      B.push({ l: 'PAUSE', f: function () { touchPause(true); }, c: 'small' });
+      B.push({ l: 'FIRE', f: function () { if (control !== 'mouse') setControl('mouse'); mouse.fire = true; }, c: 'fire', hold: true });
+    }
   } else if (screen === SCREEN_SELECT) {
     B.push({ l: '1 PLAYER', f: tuiKey('Digit1'), c: 'go' });
     if (arcadeUnlocked) B.push({ l: 'ARCADE', f: tuiKey('Digit3') });
@@ -1539,8 +1561,34 @@ function touchButtons() {
   }
   return B;
 }
+// ---- joystick (fixed, left side) and pause ----
+const joyEl = document.getElementById('joy'), joyKnob = joyEl.querySelector('.jk'), pauseEl = document.getElementById('pausebox');
+function joyReset() { touch.joy.x = 0; touch.joy.y = 0; touch.joy.id = -1; joyKnob.style.transform = ''; }
+function joyMove(e) {
+  const r = joyEl.getBoundingClientRect(), R = r.width * 0.34;
+  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const m = Math.hypot(dx, dy); if (m > R) { dx *= R / m; dy *= R / m; }
+  touch.joy.x = dx / R; touch.joy.y = dy / R;
+  joyKnob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+}
+function touchPause(on) {
+  if (on === touch.paused) return;
+  touch.paused = on; touch.sure = 0; touch.tick = 3; joyReset();
+  document.body.classList.toggle('paused', on);
+  try { if (audioCtx) { if (on) audioCtx.suspend(); else audioCtx.resume(); } } catch (e) { /* ignore */ }
+  if (!on) { lastTime = 0; accumulator = 0; }
+}
+function touchAutoPause() { if (touch.enabled && screen === SCREEN_PLAY && !touch.paused) touchPause(true); }
+function touchJoyKeys(c) {                       // the stick drives player 1 like the keyboard's 8 directions
+  if (!touch.enabled || screen !== SCREEN_PLAY || touch.paused) return;
+  const j = touch.joy, T = 0.34;
+  if (j.x < -T) c.left = true; if (j.x > T) c.right = true; if (j.y < -T) c.up = true; if (j.y > T) c.down = true;
+  if (c.left || c.right || c.up || c.down) { delete c.ax; delete c.ay; }
+}
 function touchUIUpdate() {
   if (!touch.enabled) return;
+  const showJoy = (screen === SCREEN_PLAY && !touch.paused);
+  if (document.body.classList.contains('joyon') !== showJoy) { document.body.classList.toggle('joyon', showJoy); if (!showJoy) joyReset(); }
   if (touch.sure > 0) touch.sure -= 1;
   if (screen === SCREEN_PLAY && touch.id === -1 && players[0]) {          // no finger down: the pointer target is where the cowboy stands
     mouse.x = players[0].x + FIG_W / 2; mouse.y = players[0].y + FIG_H / 2; mouse.has = true;
@@ -1569,20 +1617,24 @@ function initTouch() {
     mouseToLogical(e);
     if (screen === SCREEN_SELECT) keysPressedThisStep.add('Digit1');                       // tap = 1 PLAYER
     else if (screen === SCREEN_CONTROLS && !ctl.editing) { if (ctlHover()) keysPressedThisStep.add('Enter'); }   // tap a row to choose it
-    else if (screen === SCREEN_PLAY && touch.id === -1) {
-      const p = players[0];
-      touch.id = e.pointerId; touch.sx = e.clientX; touch.sy = e.clientY;
-      touch.tx0 = p ? p.x + FIG_W / 2 : mouse.x; touch.ty0 = p ? p.y + FIG_H / 2 : mouse.y;
-      mouse.x = touch.tx0; mouse.y = touch.ty0; mouse.has = true;
-    }
   }, { passive: false });
+  joyEl.addEventListener('pointerdown', function (e) {
+    e.preventDefault(); e.stopPropagation();
+    if (touch.joy.id !== -1) return;
+    touch.joy.id = e.pointerId; try { joyEl.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
+    joyMove(e);
+  });
+  joyEl.addEventListener('pointermove', function (e) { if (e.pointerId === touch.joy.id) joyMove(e); });
+  const joyEnd = function (e) { if (e.pointerId === touch.joy.id) joyReset(); };
+  joyEl.addEventListener('pointerup', joyEnd); joyEl.addEventListener('pointercancel', joyEnd);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) touchAutoPause(); });
+  window.addEventListener('pagehide', touchAutoPause);
+  window.addEventListener('blur', touchAutoPause);
   window.addEventListener('pointermove', function (e) {
     if (e.pointerType !== 'touch' || e.pointerId !== touch.id) return;
     const r = (activePresentMode === 'gl' ? glCanvas : canvas).getBoundingClientRect();
     const sc = r.width / PLAYFIELD_W; if (!sc) return;
-    mouse.x = Math.max(0, Math.min(PLAYFIELD_W, touch.tx0 + (e.clientX - touch.sx) / sc * touch.gain));
-    mouse.y = Math.max(0, Math.min(PLAYFIELD_H, touch.ty0 + (e.clientY - touch.sy) / sc * touch.gain));
-    mouse.has = true;
+    return;
   });
   const end = function (e) { if (e.pointerId === touch.id) touch.id = -1; };
   window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
@@ -1636,7 +1688,7 @@ function mouseController(c) {
 
 function readHumanController(index) {
   const c = readKeyboardController(index);
-  if (index === 0) mouseController(c);
+  if (index === 0) { mouseController(c); touchJoyKeys(c); }
   if (index === 0 && control !== 'pad' && pads[0] && (pads[0].left || pads[0].right || pads[0].up || pads[0].down || pads[0].fireEdge)) setControl('pad');   // using the controller in a match means CONTROLLER, whatever the menu says
   const g = ((index === 0 && control === 'pad') || (index === 1 && mode === 2)) ? pads[index] : null;
   if (g) {
@@ -3784,7 +3836,7 @@ function enterReel() {
   if (!reel.clips.length) return;
   reel.saved = takeSnap(); reel.savedPopups = popups.slice(); reel.savedTrick = trick; reel.savedScreen = screen;
   popups.length = 0; trick = null;
-  reel.order = reel.clips.slice().sort(function (a, b) { return a.seq - b.seq; });
+  reel.order = reel.clips.slice().sort(function (a, b) { return (a.rating - b.rating) || (a.seq - b.seq); });   // countdown: weakest first, the best kill plays last as #1
   reel.exporting = false; reel.msg = ''; reel.msgT = 0;
   musicStop();
   reelStartClip(0);
@@ -3803,7 +3855,7 @@ function exitReel() {
 }
 
 function reelStartClip(i) {
-  reel.cur = i; reel.pos = 0; reel.hold = 0; reel.lastIdx = -1; reel.shakeLeft = 0;
+  reel.cur = i; reel.age = 0; reel.pos = 0; reel.hold = 0; reel.lastIdx = -1; reel.shakeLeft = 0;
   const c = reel.order[i];
   // trail of the killing bullet: its positions over the contiguous frames it was alive
   reel.trail = [];
@@ -3831,6 +3883,7 @@ function updateReel() {
   const k = keysPressedThisStep;
   if (reel.msgT > 0) reel.msgT -= 1;
   if (reel.encoding) { return; }
+  reel.age = (reel.age || 0) + 1;
   if (k.has('Escape') || k.has('KeyK') || k.has('Backspace')) { exitReel(); return; }
   if (!reel.exporting) {
     if (k.has('ArrowRight') || k.has('KeyN')) { if (reel.cur < reel.order.length - 1) { reelStartClip(reel.cur + 1); sfx('select'); } }
@@ -3874,6 +3927,33 @@ function reelLabel(c) {
   if (c.rating >= 3) return 'TRICK SHOT';
   if (c.rating > 0) return 'BANK SHOT';
   return 'CLEAN KILL';
+}
+
+GLYPHS['#'] = ['.#.#.','#####','.#.#.','.#.#.','#####','.#.#.','.....'];
+// ---- top-N countdown graphics: slam-in numeral, corner badge, and a 5 4 3 2 1 progress row ----
+function drawCountdownTop(c) {
+  const N = reel.order.length, num = N - reel.cur, a = reel.age || 0, gold = '#ffd23f';
+  const badge = '#' + num, bw = textWidth(badge) + 5;
+  ctx.fillStyle = num === 1 ? gold : 'rgba(0,0,0,0.75)'; ctx.fillRect(2, HUD_H + 3, bw, 11);
+  drawText(badge, 4, HUD_H + 5, num === 1 ? '#000000' : gold);
+  if (a < 60 && N > 1 || a < 60 && num === 1) {
+    const sc = a < 8 ? 12 - a * 0.5 : 8, fade = a > 46 ? Math.max(0, (60 - a) / 14) : 1;
+    const w = 5 * sc, x = Math.round((PLAYFIELD_W - w) / 2), y = HUD_H + 46;
+    ctx.save(); ctx.globalAlpha = fade * 0.92;
+    drawGlyphScaled(String(num), x + 3, y + 3, '#000000', sc);
+    drawGlyphScaled(String(num), x, y, (Math.floor(a / 4) % 2 === 0 || num !== 1) ? gold : COLOR.white, sc);
+    const cap = (N > 1 && reel.cur === 0 && a < 60) ? 'TOP ' + N + ' KILLS' : (num === 1 ? 'NUMBER ONE' : '');
+    if (cap) { const cw = textWidth(cap) + 8; ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(Math.floor((PLAYFIELD_W - cw) / 2), y - 16, cw, 11); drawCenter(cap, y - 14, COLOR.white); }
+    ctx.restore();
+  }
+}
+function drawCountdownPips(mid, y) {
+  const N = reel.order.length, num = N - reel.cur, cell = 14, x0 = Math.floor(mid - N * cell / 2);
+  for (let k = N; k >= 1; k--) {
+    const x = x0 + (N - k) * cell;
+    if (k === num) { ctx.fillStyle = '#ffd23f'; ctx.fillRect(x, y - 1, cell - 2, 9); drawText(String(k), x + 4, y, '#000000'); }
+    else drawText(String(k), x + 4, y, k > num ? '#6e6250' : '#b9ae98');
+  }
 }
 
 function drawReel() {
@@ -3930,30 +4010,42 @@ function drawReel() {
     const sub = c.melee ? c.melee : (c.tree ? c.tree + ' TREE ' : '') + (c.wall ? c.wall + ' WALL' : '') || (c.head ? 'BETWEEN THE EYES' : 'NO BOUNCE');
     drawCenter(sub, y + 10, PLAYER_BODY[c.owner]);
   }
+  drawCountdownTop(c);
   // caption strip
-  const sh = reel.exporting ? 36 : 32, sy = TOTAL_H - sh;
+  const sh = reel.exporting ? 44 : 32, sy = TOTAL_H - sh;
   ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, sy, PLAYFIELD_W, sh);
   const who = (c.owner === 0 && p1Name) ? p1Name : ((mode === 1) ? 'YOU' : 'P' + (c.owner + 1));
   if (reel.exporting) {                      // captures carry the credit line and the QR (left block + QR on the right)
     const mid = 62, line = function (t, y, col) { drawText(t, Math.floor(mid - textWidth(t) / 2), y, col); };
-    line(who + ' KILL ' + (reel.cur + 1), sy + 5, PLAYER_BODY[c.owner]);
-    line('SHOWDOWN IN 2026 AD', sy + 16, COLOR.white);
-    line('CAPTURES COURTESY', sy + 26, CREDIT_COL);
+    drawCountdownPips(mid, sy + 3);
+    line(who + ' KILL #' + (reel.order.length - reel.cur), sy + 14, PLAYER_BODY[c.owner]);
+    line('SHOWDOWN IN 2026 AD', sy + 24, COLOR.white);
+    line('CAPTURES COURTESY', sy + 34, CREDIT_COL);
     drawEngineQR(PLAYFIELD_W - 34, TOTAL_H - 34);
   } else {
-    drawCenter('KILL ' + (reel.cur + 1) + ' OF ' + reel.order.length + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
+    drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length : 'BEST KILL') + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
     drawCenter(touch.enabled ? 'TAP ARROWS FOR CLIPS' : 'ARROWS CLIP  SPACE AGAIN', sy + 13, COLOR.cyan);
     drawCenter(reel.msgT > 0 ? reel.msg : (touch.enabled ? 'SAVE GIF OR VIDEO BELOW' : 'D GIF  V VIDEO  ESC EXIT'), sy + 23, reel.msgT > 0 ? '#ffd23f' : COLOR.cyan);
   }
 }
 
 // ---- save the reel as a video (records the canvas while the whole reel plays) ----
+function reelVideoFrame() {
+  if (!reel.vctx) return;
+  const c = reel.vctx, k = GIF_SCALE;
+  c.fillStyle = '#000'; c.fillRect(0, 0, reel.vc.width, reel.vc.height);
+  c.drawImage(gameCanvas, -Math.round(reel.sx) * k, -Math.round(reel.sy) * k, PLAYFIELD_W * k, TOTAL_H * k);
+}
+
 function reelStartVideoExport() {
   reel.kind = 'video';
   if (!window.MediaRecorder) { reel.msg = 'SAVE NEEDS CHROME'; reel.msgT = 180; return; }
   try {
-    const src = (activePresentMode === 'gl') ? glCanvas : canvas;
-    const stream = src.captureStream(60);
+    // record the clean game picture at an exact 3x (480x672), not the full-resolution CRT canvas: far smaller files
+    const vc = document.createElement('canvas'); vc.width = PLAYFIELD_W * GIF_SCALE; vc.height = TOTAL_H * GIF_SCALE;
+    reel.vc = vc; reel.vctx = vc.getContext('2d'); reel.vctx.imageSmoothingEnabled = false;
+    reelVideoFrame();
+    const stream = vc.captureStream(30);
     if (audioCtx && audioMaster && audioCtx.createMediaStreamDestination) {
       reel.dest = audioCtx.createMediaStreamDestination();
       audioMaster.connect(reel.dest);
@@ -3965,12 +4057,12 @@ function reelStartVideoExport() {
     reel.chunks = [];
     reel.ext = (mt.indexOf('mp4') >= 0) ? 'mp4' : 'webm';
     reel.mime = reel.ext === 'mp4' ? 'video/mp4' : 'video/webm';
-    reel.rec = new MediaRecorder(stream, mt ? { mimeType: mt, videoBitsPerSecond: 8000000 } : { videoBitsPerSecond: 8000000 });
+    reel.rec = new MediaRecorder(stream, mt ? { mimeType: mt, videoBitsPerSecond: 2000000 } : { videoBitsPerSecond: 2000000 });
     reel.rec.ondataavailable = function (e) { if (e.data && e.data.size) reel.chunks.push(e.data); };
     reel.rec.onstop = function () {
       if (reel.discard) { reel.discard = false; return; }
       const blob = new Blob(reel.chunks, { type: reel.mime });
-      const how = deliverFile(blob, 'SHOWDOWN_KILL_REEL.' + reel.ext); saveDone('video', how);
+      const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_KILLS.' + reel.ext); saveDone('video', how);
       reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED VIDEO TO DOWNLOADS'; reel.msgT = 260;
     };
     reel.title0 = document.title; document.title = 'REC - SAVING KILL REEL';
@@ -4098,7 +4190,7 @@ function gifFinish() {
   setTimeout(function () {                              // let the screen show the message first
     try {
       const blob = gifEncode();
-      const how = deliverFile(blob, 'SHOWDOWN_KILL_REEL.gif'); saveDone('gif', how);
+      const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_KILLS.gif'); saveDone('gif', how);
       reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED GIF TO DOWNLOADS'; reel.msgT = 260;
     } catch (e) {
       reel.msg = 'GIF FAILED'; reel.msgT = 200;
@@ -4134,7 +4226,7 @@ function reelStopRecording(discard) {
   reel.discard = !!discard;
   try { if (reel.rec && reel.rec.state !== 'inactive') reel.rec.stop(); } catch (e) { /* ignore */ }
   try { if (reel.dest && audioMaster) audioMaster.disconnect(reel.dest); } catch (e) { /* ignore */ }
-  reel.dest = null; reel.exporting = false;
+  reel.dest = null; reel.exporting = false; reel.vctx = null; reel.vc = null;
   if (reel.title0) document.title = reel.title0;
   if (!discard) { reel.msg = 'SAVED REEL TO DOWNLOADS'; reel.msgT = 240; reelStartClip(0); reel.pos = reel.order[0].frames.length; }
 }
@@ -4175,7 +4267,8 @@ function loop(now) {
   lastTime = now;
   if (frameMs > 250) frameMs = 250;          // avoid spiral of death after tab switch
   accumulator += frameMs;
-  while (accumulator >= STEP_MS) {
+  if (touch.paused) accumulator = 0;           // touch pause: the game logic stands still
+  else while (accumulator >= STEP_MS) {
     update();
     accumulator -= STEP_MS;
   }
@@ -4183,6 +4276,7 @@ function loop(now) {
   touchUIUpdate();
   saveUIUpdate();
   if (gifCap.on) gifCapture();
+  if (reel.vctx) reelVideoFrame();
   if (bootOpenT > 0) bootOpenT -= 1;
   updateTreeFlash();   // tree-shot screen flash timing (render frames)
   updatePopups();  // Stage 6: popup timing, driven by render frames

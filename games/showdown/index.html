@@ -2634,7 +2634,7 @@ function drawSelect() {
     drawGlyphScaled(L.ch, tx + i * adv, ty, L.col, sc);
     drawGlyphScaled(L.ch, tx + i * adv + 1, ty, L.col, sc);
   }
-  if (select.phase === SELECT_IDLE) drawCenter('1P? PRESS 1', ty + GLYPH_H * sc + 14, COLOR.tan);
+  if (select.phase === SELECT_IDLE) drawCenter('PRESS 1 TO PLAY', TOTAL_H - 22, '#8a7a5a');
   // The chosen number appears once a game has been picked, as on the original
   if (select.phase === SELECT_CHOOSE) {
     const ch = select.shown || String(select.choice);

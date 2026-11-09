@@ -112,6 +112,7 @@ const BASE_HIT_POINTS     = 100;
 const TREE_DOUBLE_MAX     = 10;         // arcade: points double per tree ricochet (capped at 2^10)
 const HEAD_ROWS           = 6;          // top 6 px of a figure (hat + head) count as a headshot
 const HEADS_KEY           = 'showdown2026.heads';
+const KD_KEY              = 'showdown2026.kd';
 const AMMO_MAX            = 10;         // classic: bullets per player per round (reload at your own tree)
 const KILLS_TO_WIN        = 10;         // classic: first to 10 kills wins the match
 const LIVES_START         = 3;
@@ -743,6 +744,10 @@ let stage = 1;
 let stageBonus = 0;
 const headshots = [0, 0];
 let careerHeads = 0;
+const kd = [0, 0];                       // this match: kills by each side (so P1 deaths = kd[1] against the computer)
+let careerKD = [0, 0];                   // P1 kills and deaths against the computer, kept in this browser
+function saveKD() { try { localStorage.setItem(KD_KEY, JSON.stringify(careerKD)); } catch (e) { /* ignore */ } }
+function kdRatio(k, d) { return (d === 0 ? k : k / d).toFixed(2); }
 let hitHead = false;
 let variant = 'classic';               // 'classic' (10 bullets, first to 10) or 'arcade' (lives, points, trick shots)
 let arcadeUnlocked = false;
@@ -1472,6 +1477,7 @@ function mouseToLogical(e) {
 function initMouse() {
   loadMouse(); loadName();
   try { careerHeads = parseInt(localStorage.getItem(HEADS_KEY), 10) || 0; } catch (e) { careerHeads = 0; }
+  try { const v = JSON.parse(localStorage.getItem(KD_KEY)); careerKD = (Array.isArray(v) && v.length === 2) ? [v[0] | 0, v[1] | 0] : [0, 0]; } catch (e) { careerKD = [0, 0]; }
   window.addEventListener('pointermove', function (e) { if (e.pointerType === 'mouse') { mouseToLogical(e); if (screen === SCREEN_CONTROLS) ctlHover(); } });
   window.addEventListener('pointerdown', function (e) {            // controls menu: click a row to choose it
     if (screen !== SCREEN_CONTROLS || e.pointerType !== 'mouse' || e.button !== 0) return;
@@ -1548,13 +1554,14 @@ function touchButtons() {
     if (hs.phase === 'INIT') arrows();
     else {
       B.push({ l: 'REPLAY', f: tuiKey('Digit1'), c: 'go' }, { l: 'MENU', f: tuiKey('Digit2') });
-      if (reelAvailable()) B.push({ l: 'KILL REEL', f: tuiKey('KeyK'), c: 'reel' });
+      if (reelAvailable()) B.push({ l: reel.clips.length && reel.dclips.length ? 'REELS' : (reel.clips.length ? 'KILL REEL' : 'DEATH REEL'), f: tuiKey('KeyK'), c: 'reel' });
     }
   } else if (screen === SCREEN_REEL) {
     if (reel.encoding) { /* working */ }
     else if (reel.exporting) B.push({ l: 'CANCEL', f: tuiKey('Escape') });
     else {
       if (touch.pending) B.push({ l: 'SAVE / SHARE', f: touchShare, c: 'go pulse' }, { l: 'DONE', f: function () { touch.pending = null; } });
+      if ((reel.mode === 'deaths' ? reel.clips : reel.dclips).length) B.push({ l: reel.mode === 'deaths' ? 'SEE KILLS' : 'SEE DEATHS', f: tuiKey('KeyS') });
       B.push({ l: '◀', f: tuiKey('ArrowLeft'), c: 'sq' }, { l: '▶', f: tuiKey('ArrowRight'), c: 'sq' }, { l: 'AGAIN', f: tuiKey('Space') },
              { l: 'SAVE GIF', f: tuiKey('KeyD'), c: touch.pending ? '' : 'go' }, { l: 'VIDEO', f: tuiKey('KeyV') }, { l: 'EXIT', f: tuiKey('Escape') });
     }
@@ -2223,7 +2230,7 @@ function setupGame() {
   nextExtra[0] = EXTRA_LIFE_EVERY; nextExtra[1] = EXTRA_LIFE_EVERY;
   streak[0] = 0; streak[1] = 0;
   stage = 1; trick = null; justUnlocked = false;
-  headshots[0] = 0; headshots[1] = 0;
+  headshots[0] = 0; headshots[1] = 0; kd[0] = 0; kd[1] = 0;
   roundNumber = 0;
   colvinRound = (Math.random() < COLVIN_ODDS) ? 1 + Math.floor(Math.random() * 10) : 0;
   popups.length = 0;
@@ -3008,6 +3015,8 @@ function landPlayerHit(shooter, victim, bullet, isMelee) {
   const head = !selfShot && rel < HEAD_ROWS;                 // bullet centre in the hat/head rows
   hitHead = head;
   scores[shooter] += 1;
+  kd[shooter] += 1;
+  if (mode === 1) { careerKD[shooter === 0 ? 0 : 1] += 1; saveKD(); }
   roundHits += 1;
   struck[victim] = true;
   players[victim].anim.hitT = 0;          // start the spin-and-fall animation
@@ -3610,17 +3619,18 @@ function drawReplay() {
   drawCenter(who, 62, col);
   drawCenter((p1Name ? p1Name + ' ' : (mode === 1 ? 'YOU ' : 'P1 ')) + scores[0], 80, PLAYER_BODY[0]);
   drawCenter((mode === 1 ? 'P2 ' : 'P2 ') + scores[1], 91, PLAYER_BODY[1]);
-  drawCenter('HEADSHOTS  ' + headshots[0] + ' - ' + headshots[1], 106, '#ffd23f');
-  drawCenter('CAREER HEADSHOTS ' + careerHeads, 117, '#9a9a9a');
+  if (mode === 1) drawCenter('K/D ' + kd[0] + '-' + kd[1] + '  ' + kdRatio(kd[0], kd[1]), 102, COLOR.cyan);
+  drawCenter('HEADSHOTS  ' + headshots[0] + ' - ' + headshots[1], 112, '#ffd23f');
+  if (mode === 1) drawCenter('CAREER K/D ' + careerKD[0] + '-' + careerKD[1] + ' ' + kdRatio(careerKD[0], careerKD[1]), 122, '#9a9a9a');
+  drawCenter('CAREER HEADSHOTS ' + careerHeads, 132, '#9a9a9a');
   ctx.fillStyle = '#ffd23f'; ctx.fillRect(10, 150, PLAYFIELD_W - 20, 1);
   if (blink || hs.t < 20) drawCenter('REPLAY GAME?', 164, COLOR.white);
   drawCenter('1 YES   2 NO', 182, COLOR.cyan);
   if (arcadeUnlocked) drawCenter('3 ARCADE', 194, '#ffd23f');
-  if (reelAvailable()) drawCenter('K KILL REEL', 207, '#ff7a3d');
+  if (reelAvailable()) drawCenter(reel.clips.length && reel.dclips.length ? 'K KILL & DEATH REELS' : (reel.clips.length ? 'K KILL REEL' : 'K DEATH REEL'), 207, '#ff7a3d');
   if (justUnlocked) {
     const c = TREE_COLORS[Math.floor(hs.t / 6) % TREE_COLORS.length];
-    drawCenter('10-0!', 129, c);
-    drawCenter('ARCADE UNLOCKED', 139, c);
+    drawCenter('10-0! ARCADE UNLOCKED', 141, c);
   }
 }
 
@@ -3772,7 +3782,7 @@ function drawHiscore() { if (variant === 'arcade') drawHiscoreA(); else drawRepl
 // ------------------------------------------------------------------
 const REEL_PRE = 150, REEL_POST = 75, REEL_MAX_CLIPS = 5;
 let stepEvents = [];
-const reel = { ring: [], pending: [], clips: [], seq: 0, obs: null, obsRound: -1,
+const reel = { ring: [], pending: [], clips: [], dclips: [], mode: 'kills', seq: 0, obs: null, obsRound: -1,
                order: [], cur: 0, pos: 0, hold: 0, lastIdx: -1, trail: [], exporting: false, rec: null, chunks: [], dest: null,
                saved: null, msg: '', msgT: 0, sx: 0, sy: 0, shakeLeft: 0, single: false };
 
@@ -3780,7 +3790,7 @@ function cl(o) { return JSON.parse(JSON.stringify(o)); }
 
 function reelReset(full) {
   reel.ring.length = 0; reel.pending.length = 0; reel.obs = null; reel.obsRound = -1; stepEvents = [];
-  if (full) { reel.clips.length = 0; reel.seq = 0; }
+  if (full) { reel.clips.length = 0; reel.dclips.length = 0; reel.mode = 'kills'; reel.seq = 0; }
 }
 
 function takeSnap() {
@@ -3816,34 +3826,44 @@ function recordStep() {
 
 // A kill just landed (called from landPlayerHit, before this step's snapshot is taken).
 function reelKill(shooter, victim, bullet, head, meleeName) {
-  if (mode === 1 && shooter !== 0) return;                 // one-player: the reel is the human's kills
+  const death = (mode === 1 && victim === 0);               // one-player: the human's kills go in the kill reel, the human's deaths in the death reel
   const self = !!(bullet && bullet.owner === victim);
   const tree = (!self && bullet && bullet.tree) || (self && bullet && bullet.tree) || 0;
   const wall = Math.max(0, ((bullet && bullet.ric) || 0) - tree);
   reel.pending.push({ pre: reel.ring.slice(), post: [], shooter: shooter, victim: victim, self: self, tree: tree, wall: wall,
                       slot: bullet ? bullets.indexOf(bullet) : -1, owner: bullet ? bullet.owner : shooter,
-                      rating: tree * 3 + wall * 1.5 + (self ? 1 : 0) + (head ? 5 : 0) + (meleeName ? (meleeName === 'POOL CUE' ? 40 : 9) : 0), head: !!head, melee: meleeName || null, seq: reel.seq++ });
+                      rating: tree * 3 + wall * 1.5 + (self ? 1 : 0) + (head ? 5 : 0) + (meleeName ? (meleeName === 'POOL CUE' ? 40 : 9) : 0), head: !!head, melee: meleeName || null, seq: reel.seq++, kind: death ? 'death' : 'kill' });
 }
 
 function reelFinish(pc) {
   if (pc.pre.length + pc.post.length < 12) return;
-  reel.clips.push({ frames: pc.pre.concat(pc.post), kill: pc.pre.length, shooter: pc.shooter, victim: pc.victim, self: pc.self,
-                    tree: pc.tree, wall: pc.wall, slot: pc.slot, owner: pc.owner, rating: pc.rating, head: pc.head, melee: pc.melee, seq: pc.seq });
-  if (reel.clips.length > REEL_MAX_CLIPS) {                 // keep the best clips (later ones win ties)
-    reel.clips.sort(function (a, b) { return (b.rating - a.rating) || (b.seq - a.seq); });
-    reel.clips.length = REEL_MAX_CLIPS;
+  const list = (pc.kind === 'death') ? reel.dclips : reel.clips;
+  list.push({ frames: pc.pre.concat(pc.post), kill: pc.pre.length, shooter: pc.shooter, victim: pc.victim, self: pc.self,
+              tree: pc.tree, wall: pc.wall, slot: pc.slot, owner: pc.owner, rating: pc.rating, head: pc.head, melee: pc.melee, seq: pc.seq, kind: pc.kind });
+  if (list.length > REEL_MAX_CLIPS) {                       // keep the best clips (later ones win ties)
+    list.sort(function (a, b) { return (b.rating - a.rating) || (b.seq - a.seq); });
+    list.length = REEL_MAX_CLIPS;
   }
 }
 function reelFlush() { while (reel.pending.length) reelFinish(reel.pending.shift()); }
-function reelAvailable() { reelFlush(); return reel.clips.length > 0; }
+function reelAvailable() { reelFlush(); return reel.clips.length > 0 || reel.dclips.length > 0; }
+function reelList() { return reel.mode === 'deaths' ? reel.dclips : reel.clips; }
+function reelNoun() { return reel.mode === 'deaths' ? 'DEATHS' : 'KILLS'; }
+function reelBuildOrder() { reel.order = reelList().slice().sort(function (a, b) { return (a.rating - b.rating) || (a.seq - b.seq); }); }   // countdown: weakest first, the worst/best last as #1
+function reelSwap() {
+  const other = reel.mode === 'deaths' ? 'kills' : 'deaths';
+  if (!(other === 'deaths' ? reel.dclips : reel.clips).length) { reel.msg = 'NO ' + (other === 'deaths' ? 'DEATHS' : 'KILLS') + ' RECORDED'; reel.msgT = 90; return; }
+  reel.mode = other; reelBuildOrder(); reelStartClip(0); sfx('select');
+}
 
 function reelEnter() {}
 function enterReel() {
   reelFlush();
-  if (!reel.clips.length) return;
+  if (!reel.clips.length && !reel.dclips.length) return;
+  if (!reelList().length) reel.mode = reel.mode === 'deaths' ? 'kills' : 'deaths';
   reel.saved = takeSnap(); reel.savedPopups = popups.slice(); reel.savedTrick = trick; reel.savedScreen = screen;
   popups.length = 0; trick = null;
-  reel.order = reel.clips.slice().sort(function (a, b) { return (a.rating - b.rating) || (a.seq - b.seq); });   // countdown: weakest first, the best kill plays last as #1
+  reelBuildOrder();
   reel.exporting = false; reel.msg = ''; reel.msgT = 0;
   musicStop();
   reelStartClip(0);
@@ -3896,6 +3916,7 @@ function updateReel() {
     if (k.has('ArrowRight') || k.has('KeyN')) { if (reel.cur < reel.order.length - 1) { reelStartClip(reel.cur + 1); sfx('select'); } }
     else if (k.has('ArrowLeft') || k.has('KeyB')) { if (reel.cur > 0) { reelStartClip(reel.cur - 1); sfx('select'); } }
     else if (k.has('Space') || k.has('Enter')) { reelStartClip(reel.cur); }
+    else if (k.has('KeyS')) reelSwap();
     else if (k.has('KeyD')) { reelStartExport(); return; }                    // GIF (falls back to MP4, then WebM)
     else if (k.has('KeyV')) { reelStartVideoExport(); return; }               // video: MP4, else WebM
   }
@@ -3927,6 +3948,10 @@ function updateReel() {
 }
 
 function reelLabel(c) {
+  const L = reelLabel0(c);
+  return (c.kind === 'death') ? L.replace('CLEAN KILL', 'CLEAN SHOT').replace('COLVIN SMASH', 'SHIELD BASHED').replace('ULTRA SUPERKILL', 'FLATTENED').replace('SUPERKILL', 'FLATTENED') : L;
+}
+function reelLabel0(c) {
   if (c.melee) return c.melee === 'POOL CUE' ? 'ULTRA SUPERKILL' : (c.melee === 'RIOT SHIELD' ? 'COLVIN SMASH' : 'SUPERKILL');
   if (c.head) return (c.tree || c.wall) ? 'TRICK HEADSHOT' : 'HEADSHOT';
   if (c.self) return 'OWN GOAL';
@@ -3936,6 +3961,7 @@ function reelLabel(c) {
   return 'CLEAN KILL';
 }
 
+GLYPHS['/'] = ['....#','...#.','...#.','..#..','.#...','.#...','#....'];
 GLYPHS['#'] = ['.#.#.','#####','.#.#.','.#.#.','#####','.#.#.','.....'];
 // ---- top-N countdown graphics: slam-in numeral, corner badge, and a 5 4 3 2 1 progress row ----
 function drawCountdownTop(c) {
@@ -3949,7 +3975,7 @@ function drawCountdownTop(c) {
     ctx.save(); ctx.globalAlpha = fade * 0.92;
     drawGlyphScaled(String(num), x + 3, y + 3, '#000000', sc);
     drawGlyphScaled(String(num), x, y, (Math.floor(a / 4) % 2 === 0 || num !== 1) ? gold : COLOR.white, sc);
-    const cap = (N > 1 && reel.cur === 0 && a < 60) ? 'TOP ' + N + ' KILLS' : (num === 1 ? 'NUMBER ONE' : '');
+    const cap = (N > 1 && reel.cur === 0 && a < 60) ? 'TOP ' + N + ' ' + reelNoun() : (num === 1 ? (c.kind === 'death' ? 'WORST ONE' : 'NUMBER ONE') : '');
     if (cap) { const cw = textWidth(cap) + 8; ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(Math.floor((PLAYFIELD_W - cw) / 2), y - 16, cw, 11); drawCenter(cap, y - 14, COLOR.white); }
     ctx.restore();
   }
@@ -4025,13 +4051,15 @@ function drawReel() {
   if (reel.exporting) {                      // captures carry the credit line and the QR (left block + QR on the right)
     const mid = 62, line = function (t, y, col) { drawText(t, Math.floor(mid - textWidth(t) / 2), y, col); };
     drawCountdownPips(mid, sy + 3);
-    line(who + ' KILL #' + (reel.order.length - reel.cur), sy + 14, PLAYER_BODY[c.owner]);
+    if (c.kind === 'death') line((p1Name ? p1Name + ' ' : 'YOUR ') + 'DEATH #' + (reel.order.length - reel.cur), sy + 14, PLAYER_BODY[0]);
+    else line(who + ' KILL #' + (reel.order.length - reel.cur), sy + 14, PLAYER_BODY[c.owner]);
     line('SHOWDOWN IN 2026 AD', sy + 24, COLOR.white);
     line('CAPTURES COURTESY', sy + 34, CREDIT_COL);
     drawEngineQR(PLAYFIELD_W - 34, TOTAL_H - 34);
   } else {
-    drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length : 'BEST KILL') + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
-    drawCenter(touch.enabled ? 'TAP ARROWS FOR CLIPS' : 'ARROWS CLIP  SPACE AGAIN', sy + 13, COLOR.cyan);
+    if (c.kind === 'death') drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length + ' DEATHS' : 'YOUR WORST DEATH'), sy + 3, PLAYER_BODY[0]);
+    else drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length : 'BEST KILL') + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
+    drawCenter(touch.enabled ? 'TAP ARROWS FOR CLIPS' : 'ARROWS CLIP  S ' + (reel.mode === 'deaths' ? 'KILLS' : 'DEATHS'), sy + 13, COLOR.cyan);
     drawCenter(reel.msgT > 0 ? reel.msg : (touch.enabled ? 'SAVE GIF OR VIDEO BELOW' : 'D GIF  V VIDEO  ESC EXIT'), sy + 23, reel.msgT > 0 ? '#ffd23f' : COLOR.cyan);
   }
 }
@@ -4069,7 +4097,7 @@ function reelStartVideoExport() {
     reel.rec.onstop = function () {
       if (reel.discard) { reel.discard = false; return; }
       const blob = new Blob(reel.chunks, { type: reel.mime });
-      const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_KILLS.' + reel.ext); saveDone('video', how);
+      const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_' + reelNoun() + '.' + reel.ext); saveDone('video', how);
       reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED VIDEO TO DOWNLOADS'; reel.msgT = 260;
     };
     reel.title0 = document.title; document.title = 'REC - SAVING KILL REEL';
@@ -4197,7 +4225,7 @@ function gifFinish() {
   setTimeout(function () {                              // let the screen show the message first
     try {
       const blob = gifEncode();
-      const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_KILLS.gif'); saveDone('gif', how);
+      const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_' + reelNoun() + '.gif'); saveDone('gif', how);
       reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED GIF TO DOWNLOADS'; reel.msgT = 260;
     } catch (e) {
       reel.msg = 'GIF FAILED'; reel.msgT = 200;

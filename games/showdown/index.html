@@ -1523,14 +1523,36 @@ function deliverFile(blob, name) {
       const f = new File([blob], name, { type: blob.type });
       if (navigator.canShare({ files: [f] })) { touch.pending = { file: f, blob: blob, name: name }; return 'share'; }
     }
-  } catch (e) { /* fall through to a plain download */ }
+  } catch (e) { /* fall through */ }
+  if (touch.enabled) { touch.pending = { file: null, blob: blob, name: name }; return 'share'; }   // no share sheet (some phone browsers): the SAVE button opens a "press and hold" preview instead
   downloadBlob(blob, name); return 'download';
+}
+// A full-screen preview of the finished file: press-and-hold the picture to Add to Photos / Save Image, or use the download link.
+function showSavePreview(p) {
+  const old = document.getElementById('savepreview'); if (old) old.remove();
+  const o = document.createElement('div'); o.id = 'savepreview';
+  o.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:30;background:rgba(0,0,0,0.95);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:14px;font:700 15px/1.35 ui-monospace,Menlo,Consolas,monospace;color:#ffd23f;text-align:center;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto;touch-action:auto';
+  ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click'].forEach(function (ev) { o.addEventListener(ev, function (e) { e.stopPropagation(); }); });
+  const url = URL.createObjectURL(p.blob), isVid = /^video/.test(p.blob.type);
+  const m = document.createElement(isVid ? 'video' : 'img'); m.src = url;
+  m.style.cssText = 'max-width:92vw;max-height:58vh;image-rendering:pixelated;border:3px solid #ffd23f;-webkit-touch-callout:default';
+  if (isVid) { m.controls = true; m.playsInline = true; m.loop = true; }
+  const t = document.createElement('div');
+  t.textContent = isVid ? 'PLAY IT, THEN USE THE VIDEO\'S SHARE OR DOWNLOAD BUTTON. NO LUCK? GO BACK AND USE SAVE GIF.' : 'PRESS AND HOLD THE PICTURE, THEN CHOOSE ADD TO PHOTOS OR SAVE IMAGE.';
+  const a = document.createElement('a'); a.href = url; a.download = p.name; a.textContent = 'OR DOWNLOAD THE FILE';
+  a.style.cssText = 'color:#6fe3ff;font-size:14px';
+  const c = document.createElement('button'); c.textContent = 'CLOSE';
+  c.style.cssText = 'font:inherit;color:#f6f2e8;background:#1b1610;border:3px solid #8a6a50;border-radius:10px;padding:12px 34px;min-height:48px';
+  c.addEventListener('click', function () { o.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000); });
+  o.appendChild(m); o.appendChild(t); o.appendChild(a); o.appendChild(c);
+  document.body.appendChild(o);
 }
 function touchShare() {
   const p = touch.pending; if (!p) return;
+  if (!p.file) { showSavePreview(p); return; }
   let r; try { r = navigator.share({ files: [p.file], title: 'SHOWDOWN IN 2026 AD' }); } catch (e) { r = Promise.reject(e); }
   r.then(function () { touch.pending = null; reel.msg = 'SAVED!'; reel.msgT = 200; })
-   .catch(function (e) { if (e && e.name === 'AbortError') return; downloadBlob(p.blob, p.name); touch.pending = null; reel.msg = 'SAVED TO DOWNLOADS'; reel.msgT = 200; });
+   .catch(function (e) { if (e && e.name === 'AbortError') return; showSavePreview(p); });   // the share sheet failed: fall back to the press-and-hold preview
 }
 function tuiKey(code) { return function () { keysPressedThisStep.add(code); }; }
 function touchButtons() {

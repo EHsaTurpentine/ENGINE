@@ -3852,16 +3852,47 @@ function reelKill(shooter, victim, bullet, head, meleeName) {
   const self = !!(bullet && bullet.owner === victim);
   const tree = (!self && bullet && bullet.tree) || (self && bullet && bullet.tree) || 0;
   const wall = Math.max(0, ((bullet && bullet.ric) || 0) - tree);
-  reel.pending.push({ pre: reel.ring.slice(), post: [], shooter: shooter, victim: victim, self: self, tree: tree, wall: wall,
-                      slot: bullet ? bullets.indexOf(bullet) : -1, owner: bullet ? bullet.owner : shooter,
-                      rating: tree * 3 + wall * 1.5 + (self ? 1 : 0) + (head ? 5 : 0) + (meleeName ? (meleeName === 'POOL CUE' ? 40 : 9) : 0), head: !!head, melee: meleeName || null, seq: reel.seq++, kind: death ? 'death' : 'kill' });
+  const pc = { pre: reel.ring.slice(), post: [], shooter: shooter, victim: victim, self: self, tree: tree, wall: wall,
+               slot: bullet ? bullets.indexOf(bullet) : -1, owner: bullet ? bullet.owner : shooter,
+               rating: tree * 3 + wall * 1.5 + (self ? 1 : 0) + (head ? 5 : 0) + (meleeName ? (meleeName === 'POOL CUE' ? 40 : 9) : 0), head: !!head, melee: meleeName || null, seq: reel.seq++, kind: death ? 'death' : 'kill' };
+  if (death) { const cm = deathComedy(pc); pc.rating = cm.r; pc.why = cm.why; pc.quip = cm.quip; }
+  reel.pending.push(pc);
+}
+
+// The death reel is ranked for comedy first, spectacle second: the goal is a clip the player can laugh at.
+// Every funny circumstance adds points; the biggest contributor also names the clip and gives it a one-line quip.
+function deathComedy(pc) {
+  const pre = pc.pre, last = pre.length ? pre[pre.length - 1] : null;
+  let r = 0, best = 0, why = 'CLEAN SHOT', quip = 'LIGHTS OUT';
+  const add = function (pts, w, q) { if (pts <= 0) return; r += pts; if (pts > best) { best = pts; why = w; quip = q; } };
+  if (pc.self) add(30, 'SHOT YOURSELF', 'YOUR OWN BULLET');
+  if (pc.melee) add(22, 'FLATTENED', pc.melee);
+  if (pc.tree) add(pc.tree * 7, pc.tree > 1 ? 'TREE PINBALL' : 'OUTSMARTED BY TREE', pc.tree + ' TREE BOUNCE' + (pc.tree > 1 ? 'S' : ''));
+  if (pc.wall) add(pc.wall * 4, pc.wall > 2 ? 'PINBALLED' : 'BANKED OFF A WALL', pc.wall + ' WALL BOUNCE' + (pc.wall > 1 ? 'S' : ''));
+  if (pc.head) add(5, 'HATS OFF', 'BETWEEN THE EYES');
+  if (pre.length < 70) add(14, 'DEAD ON ARRIVAL', 'OVER BEFORE IT BEGAN');
+  if (last) {
+    if (last.am[0] >= AMMO_MAX) add(12, 'NEVER FIRED A SHOT', 'GUN STILL FULL');
+    else if (last.am[0] === 0) add(9, 'OUT OF BULLETS', 'JUST CLICKING');
+    let mv = 0;
+    for (let i = Math.max(1, pre.length - 90); i < pre.length; i++) mv += Math.abs(pre[i].p[0].x - pre[i - 1].p[0].x) + Math.abs(pre[i].p[0].y - pre[i - 1].p[0].y);
+    if (mv < 4 && pre.length >= 70) add(9, 'SITTING DUCK', 'NOT EVEN MOVING');
+    else if (mv > 150) add(Math.min(6, (mv - 120) / 15), 'RUNNING IN CIRCLES', 'FAST BUT NOT FAST ENOUGH');
+    const n = last.b.length, mine = last.b.filter(function (b) { return b.owner === 0; }).length;
+    if (n >= 4) add(Math.min(8, (n - 2) * 2), 'BULLET STORM', n + ' SHOTS IN THE AIR');
+    if (mine > 0) add(Math.min(8, mine * 4), 'SO CLOSE', 'YOUR SHOT WAS ON ITS WAY');
+    if (last.sk[0] >= 3) add(Math.min(12, last.sk[0] * 2), 'STREAK OVER', 'THE WINNING STOPS HERE');
+    if (variant === 'classic' && last.sc[1] >= KILLS_TO_WIN - 1) add(11, 'MATCH POINT OOPS', 'GAME OVER, PARDNER');
+  }
+  r += ((pc.seq * 7919) % 5) * 0.4;                          // a little jitter so equal clips do not always sort the same way
+  return { r: r, why: why, quip: quip };
 }
 
 function reelFinish(pc) {
   if (pc.pre.length + pc.post.length < 12) return;
   const list = (pc.kind === 'death') ? reel.dclips : reel.clips;
   list.push({ frames: pc.pre.concat(pc.post), kill: pc.pre.length, shooter: pc.shooter, victim: pc.victim, self: pc.self,
-              tree: pc.tree, wall: pc.wall, slot: pc.slot, owner: pc.owner, rating: pc.rating, head: pc.head, melee: pc.melee, seq: pc.seq, kind: pc.kind });
+              tree: pc.tree, wall: pc.wall, slot: pc.slot, owner: pc.owner, rating: pc.rating, head: pc.head, melee: pc.melee, seq: pc.seq, kind: pc.kind, why: pc.why, quip: pc.quip });
   if (list.length > REEL_MAX_CLIPS) {                       // keep the best clips (later ones win ties)
     list.sort(function (a, b) { return (b.rating - a.rating) || (b.seq - a.seq); });
     list.length = REEL_MAX_CLIPS;
@@ -3997,7 +4028,7 @@ function drawCountdownTop(c) {
     ctx.save(); ctx.globalAlpha = fade * 0.92;
     drawGlyphScaled(String(num), x + 3, y + 3, '#000000', sc);
     drawGlyphScaled(String(num), x, y, (Math.floor(a / 4) % 2 === 0 || num !== 1) ? gold : COLOR.white, sc);
-    const cap = (N > 1 && reel.cur === 0 && a < 60) ? 'TOP ' + N + ' ' + reelNoun() : (num === 1 ? (c.kind === 'death' ? 'WORST ONE' : 'NUMBER ONE') : '');
+    const cap = (N > 1 && reel.cur === 0 && a < 60) ? 'TOP ' + N + ' ' + reelNoun() : (num === 1 ? (c.kind === 'death' ? 'HALL OF SHAME' : 'NUMBER ONE') : '');
     if (cap) { const cw = textWidth(cap) + 8; ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(Math.floor((PLAYFIELD_W - cw) / 2), y - 16, cw, 11); drawCenter(cap, y - 14, COLOR.white); }
     ctx.restore();
   }
@@ -4058,11 +4089,11 @@ function drawReel() {
   const hot = (d > -26 && d < 36);
   if (hot) {
     const flash = (Math.floor(reel.pos / 4) % 2 === 0);
-    const lab = reelLabel(c);
+    const lab = (c.kind === 'death' && c.why) ? c.why : reelLabel(c);
     const w = textWidth(lab), x = Math.floor((PLAYFIELD_W - w) / 2), y = HUD_H + 5;
     ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(x - 3, y - 3, w + 6, 2 * 10 + 1);
     drawText(lab, x, y, flash ? '#ffd23f' : COLOR.white);
-    const sub = c.melee ? c.melee : (c.tree ? c.tree + ' TREE ' : '') + (c.wall ? c.wall + ' WALL' : '') || (c.head ? 'BETWEEN THE EYES' : 'NO BOUNCE');
+    const sub = (c.kind === 'death' && c.quip) ? c.quip : c.melee ? c.melee : (c.tree ? c.tree + ' TREE ' : '') + (c.wall ? c.wall + ' WALL' : '') || (c.head ? 'BETWEEN THE EYES' : 'NO BOUNCE');
     drawCenter(sub, y + 10, PLAYER_BODY[c.owner]);
   }
   drawCountdownTop(c);
@@ -4079,7 +4110,7 @@ function drawReel() {
     line('CAPTURES COURTESY', sy + 34, CREDIT_COL);
     drawEngineQR(PLAYFIELD_W - 34, TOTAL_H - 34);
   } else {
-    if (c.kind === 'death') drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length + ' DEATHS' : 'YOUR WORST DEATH'), sy + 3, PLAYER_BODY[0]);
+    if (c.kind === 'death') drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length + ' DEATHS' : 'YOUR FUNNIEST DEATH'), sy + 3, PLAYER_BODY[0]);
     else drawCenter((reel.order.length > 1 ? '#' + (reel.order.length - reel.cur) + ' OF TOP ' + reel.order.length : 'BEST KILL') + ' BY ' + who, sy + 3, PLAYER_BODY[c.owner]);
     drawCenter(touch.enabled ? 'TAP ARROWS FOR CLIPS' : 'ARROWS CLIP  S ' + (reel.mode === 'deaths' ? 'KILLS' : 'DEATHS'), sy + 13, COLOR.cyan);
     drawCenter(reel.msgT > 0 ? reel.msg : (touch.enabled ? 'SAVE GIF OR VIDEO BELOW' : 'D GIF  V VIDEO  ESC EXIT'), sy + 23, reel.msgT > 0 ? '#ffd23f' : COLOR.cyan);

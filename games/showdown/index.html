@@ -4078,6 +4078,8 @@ function reelStartVideoExport() {
   try {
     // record the clean game picture at an exact 3x (480x672), not the full-resolution CRT canvas: far smaller files
     const vc = document.createElement('canvas'); vc.width = PLAYFIELD_W * GIF_SCALE; vc.height = TOTAL_H * GIF_SCALE;
+    vc.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1';
+    document.body.appendChild(vc);                           // Safari only records canvases that are in the page
     reel.vc = vc; reel.vctx = vc.getContext('2d'); reel.vctx.imageSmoothingEnabled = false;
     reelVideoFrame();
     const stream = vc.captureStream(30);
@@ -4097,12 +4099,14 @@ function reelStartVideoExport() {
     reel.rec.onstop = function () {
       if (reel.discard) { reel.discard = false; return; }
       const blob = new Blob(reel.chunks, { type: reel.mime });
+      if (blob.size < 2000) { reel.msg = 'VIDEO FAILED - TRY SAVE GIF'; reel.msgT = 300; return; }   // empty recording: say so instead of saving a dud
       const how = deliverFile(blob, 'SHOWDOWN_TOP_' + reel.order.length + '_' + reelNoun() + '.' + reel.ext); saveDone('video', how);
       reel.msg = (how === 'share') ? 'TAP SAVE BUTTON TO KEEP IT' : 'SAVED VIDEO TO DOWNLOADS'; reel.msgT = 260;
     };
     reel.title0 = document.title; document.title = 'REC - SAVING KILL REEL';
     reel.exporting = true; reel.discard = false;
     reelStartClip(0);
+    reel.rec.onerror = function () { reel.msg = 'VIDEO FAILED - TRY SAVE GIF'; reel.msgT = 300; try { reelStopExport(true); } catch (e2) { /* ignore */ } };
     reel.rec.start(250);
   } catch (e) { reel.exporting = false; reel.msg = 'SAVE FAILED'; reel.msgT = 180; }
 }
@@ -4261,7 +4265,7 @@ function reelStopRecording(discard) {
   reel.discard = !!discard;
   try { if (reel.rec && reel.rec.state !== 'inactive') reel.rec.stop(); } catch (e) { /* ignore */ }
   try { if (reel.dest && audioMaster) audioMaster.disconnect(reel.dest); } catch (e) { /* ignore */ }
-  reel.dest = null; reel.exporting = false; reel.vctx = null; reel.vc = null;
+  reel.dest = null; reel.exporting = false; reel.vctx = null; if (reel.vc && reel.vc.parentNode) reel.vc.parentNode.removeChild(reel.vc); reel.vc = null;
   if (reel.title0) document.title = reel.title0;
   if (!discard) { reel.msg = 'SAVED REEL TO DOWNLOADS'; reel.msgT = 240; reelStartClip(0); reel.pos = reel.order[0].frames.length; }
 }

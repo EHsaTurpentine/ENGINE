@@ -111,63 +111,6 @@
     text-transform:uppercase;
   }
 
-  /* corner seal — secondary mark, stationary */
-  .corner-seal{
-    position: fixed;
-    right: 22px;
-    bottom: 22px;
-    z-index: 2;
-    opacity: .62;
-    transition: opacity .3s ease;
-  }
-  .corner-seal:hover, .corner-seal:focus-within{ opacity: 1; }
-
-  .corner-seal svg{ display:block; width: 100px; height:auto; }
-
-  .seal-ring{ fill:none; stroke: var(--line); stroke-width:1; transition: stroke .3s ease; }
-  .seal-mark{ stroke: var(--ink-faint); stroke-width:1; }
-  .seal-dot{ fill: var(--accent-dim); transition: fill .3s ease, filter .3s ease; }
-
-  .seal-text{
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 9.5px;
-    letter-spacing: .14em;
-    fill: var(--ink-dim);
-  }
-
-  .seal-mail{ text-decoration:none; }
-  .seal-mail tspan{ fill: var(--ink-dim); transition: fill .3s ease, filter .3s ease; }
-  .seal-mail:hover tspan,
-  .seal-mail:focus tspan{
-    fill: var(--hover);
-    filter: drop-shadow(0 0 3px rgba(156,144,217,.85));
-  }
-  .seal-mail:focus{ outline: none; }
-
-  /* the "circuit completes" moment — ring + mint marks light up with the hidden link */
-  .corner-seal:has(.seal-mail:hover) .seal-ring,
-  .corner-seal:has(.seal-mail:focus) .seal-ring{
-    stroke: var(--hover-dim);
-  }
-  .corner-seal:has(.seal-mail:hover) .seal-dot,
-  .corner-seal:has(.seal-mail:focus) .seal-dot{
-    fill: var(--hover);
-    filter: drop-shadow(0 0 3px rgba(156,144,217,.85));
-  }
-
-  .seal-motto{
-    font-family: "Unbounded", sans-serif;
-    font-weight: 800;
-    font-size: 16px;
-    letter-spacing: .01em;
-    fill: var(--ink);
-  }
-
-  @media (max-width: 520px){
-    .corner-seal{ right: 14px; bottom: 14px; }
-    .corner-seal svg{ width: 78px; }
-  }
-
   @media (prefers-reduced-motion: reduce){
     *{ transition-duration: .001s !important; }
   }
@@ -182,7 +125,7 @@
     <span class="sep" aria-hidden="true">&middot;</span>
     <a href="https://posttenebraslux3.wordpress.com" target="_blank" rel="noopener">[WordPress]</a>
     <span class="sep" aria-hidden="true">&middot;</span>
-    <a href="https://www.youtube.com/@POSTTENEBRASLUX-m9p" target="_blank" rel="noopener">[YouTube]</a>
+    <a href="https://www.youtube.com/@EHsaTurpentine" target="_blank" rel="noopener">[YouTube]</a>
     <span class="sep" aria-hidden="true">&middot;</span>
     <a href="https://ehsaturpentine.github.io/ENGINE/archive/" target="_blank" rel="noopener">[Archive]</a>
     <span class="sep" aria-hidden="true">&middot;</span>
@@ -194,31 +137,313 @@
 
 </main>
 
-<div class="corner-seal">
-  <svg viewBox="0 0 300 300" aria-hidden="false">
-    <defs>
-      <path id="arcTop" d="M 30,150 A 120,120 0 0 1 270,150" />
-      <path id="arcBottom" d="M 30,150 A 120,120 0 0 0 270,150" />
-    </defs>
+<style>
+  #tfl-badge {
+    position: fixed; right: 18px; bottom: 18px; z-index: 50;
+    width: 240px; height: 240px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (max-width: 640px) { #tfl-badge { width: 150px; height: 150px; right: 10px; bottom: 10px; } }
+</style>
+<div id="tfl-badge" role="img" aria-label="Try. Fail. Learn. — Post tenebras lux · Lux esto umbras findens"></div>
+<script type="module">
+// TRY. FAIL. LEARN. — retro voxel badge (three.js)
+// mountTFL(container, { res, capture, reducedMotion })
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 
-    <circle class="seal-ring" cx="150" cy="150" r="120" />
-    <circle class="seal-ring" cx="150" cy="150" r="98" />
+function mountTFL(el, opts = {}) {
+  const CAPTURE = !!opts.capture;
+  const RES = opts.res || 256;                        // internal render size → chunky pixels when upscaled
+  const reduced = !CAPTURE && (opts.reducedMotion ?? matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const L = 8, TAU = Math.PI * 2;
 
-    <line class="seal-mark" x1="150" y1="116" x2="150" y2="138" />
-    <line class="seal-mark" x1="150" y1="164" x2="150" y2="186" />
+  // palette (matches the page: near-black, greys, a muted gold accent)
+  const C = {
+    textTop: 0xe6e6e6, textBot: 0x8c8c8c, outline: 0x141518,
+    ring: 0x3b3c41, ringHi: 0x6a6b72, glyph: 0x5e6066, glyphHi: 0xe2e2e2,
+    gold: 0x9b7a3e, goldHi: 0xf0c46a, tick: 0x55575d,
+  };
 
-    <circle class="seal-dot" cx="30" cy="150" r="2.2" />
-    <circle class="seal-dot" cx="270" cy="150" r="2.2" />
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
 
-    <text class="seal-text">
-      <textPath href="#arcTop" startOffset="50%" text-anchor="middle">POST TENEBRAS LUX</textPath>
-    </text>
-    <text class="seal-text">
-      <textPath href="#arcBottom" startOffset="50%" text-anchor="middle"><a class="seal-mail" href="mailto:lux_esto@protonmail.com" aria-label="Email"><tspan>LUX ESTO</tspan></a><tspan> UMBRAS FINDENS</tspan></textPath>
-    </text>
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: CAPTURE });
+  renderer.setPixelRatio(1);
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const cv = renderer.domElement;
+  cv.style.cssText = 'width:100%;height:100%;display:block;image-rendering:pixelated;image-rendering:crisp-edges;';
+  el.appendChild(cv);
 
-    <text class="seal-motto" x="150" y="156" text-anchor="middle">TRY. FAIL. LEARN.</text>
-  </svg>
-</div>
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+  camera.position.set(0, 0, 27.5);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 1.3));
+  const key = new THREE.DirectionalLight(0xffffff, 2.0); key.position.set(-4, 6, 9); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xc9b48a, 0.6); fill.position.set(5, -3, 4); scene.add(fill);
+
+  const root = new THREE.Group(); scene.add(root);
+
+  // ---------- 5x7 pixel font ----------
+  const F = {
+    A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+    B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+    D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+    E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+    F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
+    I: ['###', '.#.', '.#.', '.#.', '.#.', '.#.', '###'],
+    L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+    M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+    N: ['#...#', '##..#', '##..#', '#.#.#', '#..##', '#..##', '#...#'],
+    O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+    P: ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+    R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+    S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+    T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+    U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+    X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+    Y: ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+    '.': ['..', '..', '..', '..', '..', '##', '##'],
+    ' ': ['...', '...', '...', '...', '...', '...', '...'],
+  };
+  const layout = (str) => {           // -> {cells:[{gx,gy,ci}], width}
+    const cells = []; let x = 0;
+    [...str].forEach((ch, ci) => {
+      const g = F[ch]; const w = g[0].length;
+      g.forEach((row, r) => [...row].forEach((c, k) => { if (c === '#') cells.push({ gx: x + k, gy: 6 - r, ci }); }));
+      x += w + 1;
+    });
+    return { cells, width: x - 1 };
+  };
+
+  // ---------- main voxel text ----------
+  const P = 0.1, DEPTH = 0.32;
+  const WORDS = ['TRY.', 'FAIL.', 'LEARN.'];
+  const mainCells = [];
+  {
+    const full = layout(WORDS.join(' '));
+    let wordIdx = 0, charToWord = [];
+    [...WORDS.join(' ')].forEach(ch => { charToWord.push(ch === ' ' ? -1 : wordIdx); if (ch === ' ') wordIdx++; });
+    const wordMinX = [1e9, 1e9, 1e9];
+    full.cells.forEach(c => { const w = charToWord[c.ci]; wordMinX[w] = Math.min(wordMinX[w], c.gx); });
+    full.cells.forEach(c => {
+      const w = charToWord[c.ci];
+      mainCells.push({
+        x: (c.gx - full.width / 2 + 0.5) * P, y: (c.gy - 3) * P, row: c.gy, gx: c.gx, w,
+        delay: (c.gx - wordMinX[w]) * 0.012 + c.gy * 0.025 + rnd() * 0.05,
+        fx: (rnd() - 0.5) * 2.2, fv: 1 + rnd() * 1.5, faxis: new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize(),
+        fspin: (rnd() - 0.5) * 14, dis: rnd(), jit: 0,
+      });
+    });
+  }
+  const textGroup = new THREE.Group(); textGroup.position.z = 0.5; root.add(textGroup);
+  const cubeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const textMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(P, P, DEPTH), cubeMat, mainCells.length);
+  const shadowMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(P, P, DEPTH * 0.6), new THREE.MeshLambertMaterial({ color: C.outline }), mainCells.length);
+  textGroup.add(shadowMesh, textMesh);
+  const baseCol = mainCells.map(c => new THREE.Color(C.textBot).lerp(new THREE.Color(C.textTop), c.row / 6));
+
+  // ---------- pixel rings ----------
+  const RP = 0.075;
+  function pixelCircle(r, gapFn) {
+    const pts = new Map();
+    const n = Math.ceil(TAU * r / RP * 2.5);
+    for (let i = 0; i < n; i++) {
+      const a = i / n * TAU; if (gapFn && gapFn(a)) continue;
+      const x = Math.round(Math.cos(a) * r / RP), y = Math.round(Math.sin(a) * r / RP);
+      pts.set(x + ',' + y, [x * RP, y * RP, a]);
+    }
+    return [...pts.values()];
+  }
+  const R_IN = 4.75, R_OUT = 6.0, R_TXT = 5.38;
+  const ringMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  function ringMesh(pts) {
+    const m = new THREE.InstancedMesh(new THREE.BoxGeometry(RP, RP, 0.12), ringMat, pts.length);
+    const m4 = new THREE.Matrix4();
+    pts.forEach((p, i) => { m4.makeTranslation(p[0], p[1], 0); m.setMatrixAt(i, m4); m.setColorAt(i, new THREE.Color(C.ring)); });
+    m.userData.pts = pts; root.add(m); return m;
+  }
+  const ringIn = ringMesh(pixelCircle(R_IN));
+  const ringOut = ringMesh(pixelCircle(R_OUT));
+  // rotating dashed tick ring just outside
+  const dashPts = pixelCircle(R_OUT + 0.32, a => (a / TAU * 48) % 1 > 0.35);
+  const ringDash = ringMesh(dashPts);
+
+  // ---------- ring text ----------
+  const GP = 0.068;
+  const glyphCells = [];
+  function arcText(str, top) {
+    const lay = layout(str);
+    const arcLen = lay.width * GP * 1.25;           // a little letter spacing
+    lay.cells.forEach(c => {
+      const u = (c.gx - lay.width / 2 + 0.5) / lay.width * arcLen;  // along arc
+      const a = top ? Math.PI / 2 - u / R_TXT : -Math.PI / 2 + u / R_TXT;
+      // top: letters' "up" points outward. bottom: letters upright, "up" points toward centre.
+      const radius = top ? R_TXT + (c.gy - 3) * GP : R_TXT - (c.gy - 3) * GP;
+      glyphCells.push({ x: Math.cos(a) * radius, y: Math.sin(a) * radius, rot: top ? a - Math.PI / 2 : a + Math.PI / 2, order: top ? (u / arcLen + 0.5) * 0.5 : 0.5 + (u / arcLen + 0.5) * 0.5, ci: c.ci, top });
+    });
+  }
+  arcText('POST TENEBRAS LUX', true);
+  arcText('LUX ESTO UMBRAS FINDENS', false);
+  const glyphMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(GP * 0.95, GP * 0.95, 0.08), ringMat, glyphCells.length);
+  root.add(glyphMesh);
+
+  // ---------- crosshair ticks + gold pips ----------
+  const tickPts = [];
+  for (let y = 0.85; y <= 2.25; y += RP) { tickPts.push([0, y]); tickPts.push([0, -y]); }
+  const ticks = new THREE.InstancedMesh(new THREE.BoxGeometry(RP, RP, 0.1), new THREE.MeshLambertMaterial({ color: 0xffffff }), tickPts.length);
+  root.add(ticks);
+  const pipMat = new THREE.MeshLambertMaterial({ color: C.gold, emissive: C.gold, emissiveIntensity: 0.2 });
+  const pips = [-1, 1].map(s => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), pipMat); m.position.set(s * R_OUT, 0, 0.05); root.add(m); return m; });
+
+  // ---------- pixel shockwave (square-stepped ring) ----------
+  const shockPts = pixelCircle(1);
+  const shock = new THREE.InstancedMesh(new THREE.BoxGeometry(RP * 1.4, RP * 1.4, 0.05), new THREE.MeshBasicMaterial({ color: C.goldHi, transparent: true }), shockPts.length);
+  shock.position.z = 0.6; root.add(shock);
+
+  // ---------- easing ----------
+  const cl = v => Math.min(1, Math.max(0, v));
+  const outBounce = x => { const n = 7.5625, d = 2.75; if (x < 1 / d) return n * x * x; if (x < 2 / d) return n * (x -= 1.5 / d) * x + 0.75; if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + 0.9375; return n * (x -= 2.625 / d) * x + 0.984375; };
+  const inOut = x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  const step = (v, n) => Math.round(v * n) / n;   // quantise motion for a retro, low-framerate feel
+
+  // sequence timings
+  const DROP = [0.1, 1.0, 4.3], DROP_DUR = 0.5;
+  const CRUMBLE = 2.2, FLASH = 5.05, DISSOLVE = 7.2;
+  const HOLD_S = 6.2;  // page mode parks the sequence here
+
+  let seqStart = 0, crumbleStart = -99, flashExtra = -99;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), pos = new THREE.Vector3(), scl = new THREE.Vector3(), col = new THREE.Color();
+  const goldHi = new THREE.Color(C.goldHi), white = new THREE.Color(0xffffff);
+
+  function crumble(cell, c) {   // returns [dx, dy, angle, flash] for a FAIL cell, c = time since crumble start
+    if (c < 0 || c > 2.0) return null;
+    if (c < 0.4) {               // glitch: row-sliced jitter
+      const k = Math.floor(c * 20);
+      const j = Math.sin((cell.row + 1) * 12.9898 * (k + 1)) * 43758.5453 % 1;
+      return [Math.abs(j) > 0.6 ? step(j * 0.35, 10) : 0, 0, 0, k % 2];
+    }
+    const fall = (tau) => [cell.fx * tau, -cell.fv * 7 * tau * tau, cell.fspin * tau];
+    if (c < 1.3) { const [x, y, a] = fall(c - 0.4); return [x, y, a, 0]; }
+    const [x, y, a] = fall(0.9), p = inOut(cl((c - 1.3 - cell.delay * 0.5) / 0.6));  // rewind: learn from it
+    return [x * (1 - p), y * (1 - p), a * (1 - p), p > 0.98 ? 0.6 : 0];
+  }
+
+  function update(T) {
+    const t = ((T % L) + L) % L;
+    const s = CAPTURE ? t : reduced ? HOLD_S : Math.min(T - seqStart, HOLD_S);
+    const amb = CAPTURE ? t : T;      // ambient clock
+
+    // gentle sway (quantised for that chunky retro motion)
+    if (!reduced) {
+      root.rotation.y = step(0.28 * Math.sin(TAU * amb / L), 40);
+      root.rotation.x = step(0.08 * Math.sin(TAU * amb / (L / 2)), 40);
+    }
+
+    // crumble clock: from the sequence, or from a hover replay
+    let c = s - CRUMBLE;
+    if (!CAPTURE && T - crumbleStart < 2.1) c = T - crumbleStart;
+
+    const flashT = Math.max(CAPTURE ? -1 : -1, s - FLASH >= 0 && s - FLASH < 1 ? s - FLASH : -1, !CAPTURE && T - flashExtra < 1 ? T - flashExtra : -1);
+    const scanRow = 6 - Math.floor(((amb % 2) / 2) * 14);   // scanline sweeping down every 2s
+
+    mainCells.forEach((cell, i) => {
+      let p = cl((s - DROP[cell.w] - cell.delay) / DROP_DUR);
+      let sc = p > 0 ? 1 : 0;
+      let dy = (1 - outBounce(p)) * 2.2, dx = 0, ang = 0, glow = 0;
+      if (cell.w === 1) {
+        const cr = crumble(cell, c);
+        if (cr) { dx += cr[0]; dy += cr[1]; ang = cr[2]; glow = cr[3]; }
+      }
+      if (CAPTURE && s > DISSOLVE) sc *= 1 - cl((s - DISSOLVE - cell.dis * 0.5) / 0.15);
+      pos.set(cell.x + dx, cell.y + step(dy, 20), 0);
+      q.setFromAxisAngle(cell.faxis, ang);
+      scl.setScalar(sc);
+      m4.compose(pos, q, scl); textMesh.setMatrixAt(i, m4);
+      pos.z -= 0.12; pos.x += 0.025; pos.y -= 0.025; m4.compose(pos, q, scl); shadowMesh.setMatrixAt(i, m4);
+
+      col.copy(baseCol[i]);
+      if (cell.row === scanRow || cell.row === scanRow + 1) col.lerp(white, 0.55);
+      if (glow) col.lerp(goldHi, 0.8 * glow);
+      if (flashT >= 0) col.lerp(goldHi, 0.9 * (1 - flashT) * cl(1 - Math.abs(cell.gx * 0.012 - flashT * 1.6) * 2));
+      textMesh.setColorAt(i, col);
+    });
+    textMesh.instanceMatrix.needsUpdate = shadowMesh.instanceMatrix.needsUpdate = true;
+    textMesh.instanceColor.needsUpdate = true;
+
+    // ring text: type-on during the intro, then a slow scanning highlight
+    const typeP = reduced ? 1 : cl(s / 1.6);
+    const scanPos = (amb % L) / L;
+    glyphCells.forEach((g, i) => {
+      const on = g.order <= typeP;
+      const d = Math.min(Math.abs(g.order - scanPos), 1 - Math.abs(g.order - scanPos));
+      m4.makeRotationZ(g.rot); m4.setPosition(g.x, g.y, 0);
+      if (!on) m4.scale(new THREE.Vector3(0, 0, 0));
+      glyphMesh.setMatrixAt(i, m4);
+      col.set(C.glyph).lerp(white, cl(1 - d * 14) * 0.85);
+      if (on && Math.abs(g.order - typeP) < 0.03 && typeP < 1) col.set(C.goldHi);   // cursor
+      glyphMesh.setColorAt(i, col);
+    });
+    glyphMesh.instanceMatrix.needsUpdate = true; glyphMesh.instanceColor.needsUpdate = true;
+
+    // rings: dashed ring rotates in 1/48 steps, rings ripple on the flash
+    ringDash.rotation.z = -Math.floor(amb / L * 48 * 2) / 48 * TAU / 4;
+    [ringIn, ringOut, ringDash].forEach((m, k) => {
+      const ripple = flashT >= 0 ? cl(1 - Math.abs(flashT * 3 - k * 0.6)) : 0;
+      m.userData.pts.forEach((pnt, i) => { col.set(C.ring).lerp(goldHi, ripple * 0.8); m.setColorAt(i, col); });
+      m.instanceColor.needsUpdate = true;
+    });
+
+    // ticks: grow in, then pulse
+    tickPts.forEach((tp, i) => {
+      const vis = Math.abs(tp[1]) <= 0.85 + 1.4 * cl((s - 0.3) / 0.8);
+      m4.makeTranslation(tp[0], tp[1], 0); if (!vis) m4.scale(new THREE.Vector3(0, 0, 0));
+      ticks.setMatrixAt(i, m4);
+      const pulse = cl(1 - Math.abs(Math.abs(tp[1]) - 0.85 - ((amb % 2) / 2) * 1.4) * 4);
+      ticks.setColorAt(i, col.set(C.tick).lerp(white, pulse * 0.6));
+    });
+    ticks.instanceMatrix.needsUpdate = true; ticks.instanceColor.needsUpdate = true;
+
+    // gold pips blink like an old status LED
+    const blink = Math.floor(amb * 2) % 2 === 0;
+    pipMat.emissiveIntensity = (blink ? 0.9 : 0.15) + (flashT >= 0 ? 1.5 * (1 - flashT) : 0);
+
+    // shockwave on the LEARN flash
+    if (flashT >= 0) {
+      const r = 0.5 + flashT * 6.5;
+      shockPts.forEach((pt, i) => { m4.makeTranslation(step(pt[0] * r, 13), step(pt[1] * r, 13), 0); shock.setMatrixAt(i, m4); });
+      shock.instanceMatrix.needsUpdate = true; shock.material.opacity = 1 - flashT; shock.visible = true;
+    } else shock.visible = false;
+  }
+
+  function resize() {
+    const w = el.clientWidth || 260, h = el.clientHeight || w;
+    const k = RES / Math.max(w, h);
+    renderer.setSize(Math.round(w * k), Math.round(h * k), false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  resize();
+  if ('ResizeObserver' in window) new ResizeObserver(resize).observe(el);
+
+  if (CAPTURE) return { renderAt(t) { update(t); renderer.render(scene, camera); } };
+
+  let T = 0, last = performance.now(), visible = true;
+  if ('IntersectionObserver' in window) new IntersectionObserver(e => { visible = e[0].isIntersecting; }).observe(el);
+  const loop = (now) => {
+    const dt = Math.min((now - last) / 1000, 0.1); last = now;
+    if (visible) { T += dt; update(T); renderer.render(scene, camera); }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+  // hover: re-live the failure; click: replay the whole intro
+  el.addEventListener('pointerenter', () => { if (!reduced && T - seqStart > HOLD_S && T - crumbleStart > 2.1) { crumbleStart = T; flashExtra = T + 2.0; } });
+  el.addEventListener('click', () => { if (!reduced) { seqStart = T; crumbleStart = -99; } });
+  return {};
+}
+
+mountTFL(document.getElementById('tfl-badge'), { res: 256 });
+</script>
+<!-- ===== /TRY. FAIL. LEARN. ===== -->
 </body>
 </html>

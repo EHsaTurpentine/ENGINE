@@ -139,11 +139,15 @@
 
 <style>
   #tfl-badge {
-    position: fixed; right: 18px; bottom: 18px; z-index: 50;
-    width: 240px; height: 240px; cursor: pointer;
+    position: fixed;
+    right: clamp(10px, 2.4vw, 18px);
+    bottom: clamp(10px, 2.4vw, 18px);
+    z-index: 50;
+    width: clamp(60px, 15vw, 130px);
+    height: clamp(60px, 15vw, 130px);
+    cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  @media (max-width: 640px) { #tfl-badge { width: 150px; height: 150px; right: 10px; bottom: 10px; } }
 </style>
 <div id="tfl-badge" role="img" aria-label="Try. Fail. Learn. — Post tenebras lux · Lux esto umbras findens"></div>
 <script type="module">

@@ -1271,10 +1271,9 @@ function bugleNote(f, dur, delay, vol) {
   });
 }
 function whistle() {
-  if (touch.enabled) { bugleNote(392, 0.10, 0, 0.2); bugleNote(523.25, 0.30, 0.12, 0.2); return; }   // phones: a short quiet sting, never the full TAPS
-  const G = 392, C = 523.25, E = 659.25, k = 0.8;
-  const seq = [[G, 0.30, 0], [G, 0.11, 0.32], [C, 0.95, 0.45], [G, 0.30, 1.55], [C, 0.11, 1.87], [E, 1.15, 2.00]];
-  seq.forEach(function (n) { bugleNote(n[0], n[1] * k, n[2] * k); });
+  // short bugle sting (the opening G-C of TAPS); phones play it quieter
+  const v = touch.enabled ? 0.2 : 0.3;
+  bugleNote(392, 0.10, 0, v); bugleNote(523.25, 0.30, 0.12, v);
 }
 
 function sfx(name, arg) {

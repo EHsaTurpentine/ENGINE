@@ -138,7 +138,7 @@ function newGame(key){
   if(k==='C')S.base=cloneMaze(customMaze);else{const idx=(k>=4&&k<=7)?rnd(4):(k&3);S.base=cloneMaze(MAZES[idx]);if(S.randomMaze)randomise(S.base)}
   S.score=0;S.round=0;S.mode='play';newRound()}
 function newRound(){
-  S.maze=cloneMaze(S.base);S.door=0;S.doorT=-2;S.f=0;S.mAcc=0;S.munAcc=0;S.mIdx=0;S.clearT=0;S.deadT=0;S.fright=0;S.chain=0;S.bump=0;S.chompT=0;S.chompAB=0;
+  S.maze=cloneMaze(S.base);S.door=0;S.doorT=-2;S.f=0;S.mAcc=.5;S.munAcc=0;S.mIdx=0;S.clearT=0;S.deadT=0;S.fright=0;S.chain=0;S.bump=0;S.chompT=0;S.chompAB=0;
   S.kc={sy:T.kcStart[0],sx:T.kcStart[1],dir:null,moving:false,face:'face',anim:0};
   S.m=[{col:COL.yellow,delay:6},{col:COL.green,delay:4},{col:COL.red,delay:4}].map(o=>({sy:126,sx:77,dir:'down',state:'box',col:o.col,first:null,wait:0,feet:0,delay:o.delay}));  // measured: green and red leave 2 frames in, yellow 2 frames after them
   const C=[[0,0,1],[0,1,0],[1,0,0],[0,8,1],[0,7,0],[1,8,0],[6,0,1],[6,1,0],[5,0,0],[6,8,1],[6,7,0],[5,8,0]];
@@ -151,7 +151,10 @@ function kcDecide(){const k=S.kc,W=wallsNow(),[r,c]=cellOf(k),want=joyDirs();
   if(ok.length){const nd=ok.length>1?ok[rnd(ok.length)]:ok[0];k.dir=nd;k.moving=true;k.face=nd;return}
   if(want.length&&!S.bumpHeld){S.bump=T.bumpFlash}            // pushing into a wall: walls flash in the invisible game
   S.bumpHeld=want.length>0;k.moving=false;k.face='face'}
-function muncherSpeedMove(){const N=Math.max(1,S.round);S.mAcc=(S.mAcc+1)%(N+1);return S.mAcc!==N}
+/* Munchers creep closer to K.C.'s speed each round but never reach it: K.C. (one step every 2 frames) is always the fastest thing in the maze.
+   Round 1 is a hair under K.C. (1/32 slower); the gap shrinks to 1/(32*round) in later rounds but never closes. */
+function muncherRate(){return .5*(1-1/(32*(S.round+1)))}
+function muncherSpeedMove(){S.mAcc+=muncherRate();if(S.mAcc>=1){S.mAcc-=1;return true}return false}
 function chooseDir(o,W,target,away){const [r,c]=cellOf(o);
   if(c<0||c>8)return o.dir;
   let opts=['up','down','left','right'].filter(d=>d!==OPP[o.dir]&&open(W,r,c,d,o.state==='eyes'));

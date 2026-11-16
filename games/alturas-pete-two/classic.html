@@ -327,7 +327,7 @@ let tPauseBtn=null;
 function touchEnable(){if(tOn)return;tOn=true;document.body.classList.add('touch')}
 try{if(window.matchMedia&&matchMedia('(pointer: coarse)').matches)touchEnable()}catch(e){}
 addEventListener('pointerdown',e=>{if(e.pointerType==='touch')touchEnable()},{passive:true});
-/* ENGINE² homage touch stick (shared by K.L.F. MUNCHAUSEN, ALTURAS PETE TWO and SHOWDOWN IN 2026 A.D.; keys and real joysticks stay as the console had them).
+/* ENGINE² homage touch stick (shared by K.L.F. MÜNCHÄÜSËN, ALTURAS PETE TWO and SHOWDOWN IN 2026 A.D.; keys and real joysticks stay as the console had them).
    Digital like the console's stick. A touch on the stick starts from its centre; a touch anywhere else on the left side starts where the finger lands.
    The anchor trails the finger at TH px, so a short flick in a new direction (a turn, or a quick fake back) registers after about TH px of travel,
    wherever the thumb has drifted to. Diagonals only inside the middle 30 degrees between two axes, so straight pushes stay straight. */

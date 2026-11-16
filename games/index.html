@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ENGINE² — Multi-Mode Game Cartridges</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* The homage standard: ENGINE² header, art in a blue frame, the smooth blue title plate (ALTURAS PETE TWO's design). */
+:root{--plate:#42a4e8;--plate-in:#0a1420;--plate-fill:#3ea6ea;--ink:#060c14;--ink2:#165078;--hint:#2a6a98;
+  --sans:"Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;background:#000;color:#f6f2e8;min-height:100%}
+body{font-family:var(--sans);display:flex;flex-direction:column;align-items:center;padding:6vh 1rem 4rem;-webkit-tap-highlight-color:transparent}
+h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.header{width:min(480px,86vw);image-rendering:pixelated;display:block;margin-bottom:.4rem}
+.sub{font:700 clamp(11px,2.6vw,14px)/1.2 var(--sans);letter-spacing:.32em;color:#777;margin:0 0 3rem;text-align:center}
+.shelf{width:min(1180px,94vw);display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:2.4rem 2rem;align-items:start}
+.box{display:block;cursor:pointer;color:inherit;outline:none;position:relative;transition:transform .18s ease}
+.art{position:relative;aspect-ratio:450/369;border:4px solid var(--plate);border-radius:3px;overflow:hidden;background:#000}
+.art img.cover{width:100%;height:100%;object-fit:cover;display:block}
+.cart{position:absolute;right:8px;bottom:8px;width:16%;height:auto;image-rendering:pixelated;filter:drop-shadow(0 3px 4px rgba(0,0,0,.7))}
+.plate{margin-top:8px;border-radius:13px;background:var(--plate);padding:5px}
+.plate>div{border-radius:10px;background:var(--plate-in);padding:2.5px}
+.plate>div>div{border-radius:8px;background:var(--plate-fill);padding:.7em .8em .75em;text-align:center;color:var(--ink)}
+.title{font:700 clamp(19px,2.3vw,25px)/1.1 var(--sans);margin:0}
+.tag{font:400 clamp(12px,1.25vw,14px)/1.3 var(--sans);margin:.35em 0 0}
+.row{margin:.65em auto 0;width:86%;border-radius:999px;padding:.28em 0;font:700 clamp(11px,1.1vw,12.5px)/1 var(--sans);letter-spacing:.06em;color:var(--ink2);position:relative}
+.box.sel .row,.box:hover .row{background:rgba(6,40,80,.22);color:var(--ink)}
+.box.sel .row::before,.box:hover .row::before{content:"";position:absolute;left:5%;top:50%;margin-top:-.42em;border-left:.6em solid var(--ink);border-top:.42em solid transparent;border-bottom:.42em solid transparent}
+.box.sel,.box:hover{transform:translateY(-3px)}
+.extra{display:block;margin:.55em auto 0;font:700 clamp(10px,1vw,11px)/1 var(--sans);letter-spacing:.08em;color:var(--hint);text-decoration:none}
+.extra:hover,.extra:focus-visible{color:var(--ink);text-decoration:underline}
+.hint{margin-top:3rem;font:700 12px/1.4 var(--sans);letter-spacing:.14em;color:#777;text-align:center}
+.archive-back{position:fixed;top:16px;left:16px;z-index:3;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.06em;text-decoration:none;color:#55585c;opacity:.75;transition:opacity .3s,color .3s}
+.archive-back:hover,.archive-back:focus-visible{opacity:1;color:#9C90D9}
+@media (max-width:520px){.archive-back{top:12px;left:12px;font-size:10px}body{padding-top:9vh}}
+@media (prefers-reduced-motion:reduce){.box{transition:none}.box.sel,.box:hover{transform:none}}
+</style>
+</head>
+<body>
+<h1>ENGINE² Multi-Mode Game Cartridges</h1>
+<a class="archive-back" href="../" aria-label="Back to ENGINE²">&#8592; ENGINE</a>
+
+<img class="header" src="hub/header.png" alt="Multi-mode game cartridge by ENGINE — ENGINE²">
+<p class="sub">SELECT GAME</p>
+
+<main class="shelf" id="shelf"></main>
+<p class="hint" id="hint">UP/DOWN · LEFT/RIGHT · START TO PLAY</p>
+
+<script>
+/* Add a new homage here: it appears on the shelf in this order. Each game's folder always holds its latest build. */
+const GAMES=[
+  {title:'SHOWDOWN IN 2026 A.D.',tag:'Shoot it out with other players — or computer-controlled androids!',href:'showdown/',art:'hub/art_showdown.jpg',cart:'hub/cart_showdown.png'},
+  {title:'ALTURAS PETE!',tag:'Rippin’ and runnin’ in the good old bad days of them ‘thar South Fork Mines!',href:'alturas-pete-two/',art:'hub/art_alturas.jpg',cart:'hub/cart_alturas.png',extra:{label:'CLASSIC ONLY',href:'alturas-pete-two/classic.html'}},
+  {title:'K.L.F. MUNCHAUSEN',tag:'Chomp the munchies, dodge the Munchers, and never let the truth spoil a good story!',href:'klf-munchausen/',art:'hub/art_klf.jpg',cart:'hub/cart_klf.png'},
+];
+const shelf=document.getElementById('shelf');
+GAMES.forEach((g,i)=>{const a=document.createElement('div');a.className='box';a.tabIndex=0;a.setAttribute('role','link');a.setAttribute('aria-label','Play '+g.title);a.dataset.href=g.href;
+  a.innerHTML='<div class="art"><img class="cover" src="'+g.art+'" alt="" loading="lazy"><img class="cart" src="'+g.cart+'" alt=""></div>'+
+    '<div class="plate"><div><div><p class="title">'+g.title+'</p><p class="tag">'+g.tag+'</p><div class="row">'+(i+1)+' PLAY</div>'+
+    (g.extra?'<a class="extra" href="'+g.extra.href+'">'+g.extra.label+'</a>':'')+'</div></div></div>';
+  shelf.appendChild(a)});
+const boxes=[...shelf.querySelectorAll('.box')];
+
+/* sound: the Odyssey² SELECT GAME bleep on launch, a short blip when the cursor moves (as in the games) */
+let ac=null;function ctx(){ac=ac||new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();return ac}
+function sq(steps,vol){try{const c=ctx(),t0=c.currentTime,o=c.createOscillator(),g=c.createGain();o.type='square';let t=t0;
+  steps.forEach(([f,ms])=>{o.frequency.setValueAtTime(f,t);t+=ms/1000});g.gain.setValueAtTime(vol,t0);g.gain.setValueAtTime(vol,t-.002);g.gain.linearRampToValueAtTime(0,t);
+  o.connect(g);g.connect(c.destination);o.start(t0);o.stop(t+.01)}catch(e){}}
+const bleep=()=>sq([[100,100],[200,100],[400,100],[800,100],[2400,100]],.08), blip=()=>sq([[500,40]],.05);
+function launch(href){bleep();setTimeout(()=>{location.href=href},520)}
+shelf.addEventListener('click',e=>{const x=e.target.closest('.extra');if(x){if(e.metaKey||e.ctrlKey||e.shiftKey)return;e.preventDefault();launch(x.getAttribute('href'));return}
+  const b=e.target.closest('.box');if(!b)return;if(e.metaKey||e.ctrlKey){open(b.dataset.href,'_blank');return}launch(b.dataset.href)});
+
+/* keyboard and one-button joystick: move the cursor along the shelf, START or FIRE to play */
+let sel=-1;function setSel(i,sound){sel=(i+boxes.length)%boxes.length;boxes.forEach((b,k)=>b.classList.toggle('sel',k===sel));boxes[sel].focus({preventScroll:true});
+  boxes[sel].scrollIntoView({block:'nearest',behavior:'smooth'});if(sound)blip()}
+function cols(){const t=boxes.map(b=>b.offsetTop);return t.filter(v=>v===t[0]).length}
+function move(d){if(sel<0)return setSel(0,true);const c=cols();setSel(sel+({left:-1,right:1,up:-c,down:c}[d]),true)}
+addEventListener('keydown',e=>{const d={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down',KeyA:'left',KeyD:'right',KeyW:'up',KeyS:'down'}[e.code];
+  if(d){e.preventDefault();move(d)}else if((e.code==='Enter'||e.code==='Space')&&sel>=0){e.preventDefault();launch(boxes[sel].dataset.href)}
+  else if(/^Digit[1-9]$/.test(e.code)){const i=+e.code.slice(5)-1;if(boxes[i]){setSel(i);launch(boxes[i].dataset.href)}}});
+let prev={},padSeen=false;
+(function poll(){const gp=[...(navigator.getGamepads?navigator.getGamepads():[])].find(p=>p&&p.connected);
+  if(gp){if(!padSeen){padSeen=true;document.getElementById('hint').textContent='JOYSTICK 1 · ONE BUTTON · FIRE TO PLAY'}
+    const b=i=>!!(gp.buttons[i]&&gp.buttons[i].pressed),x=gp.axes[0]||0,y=gp.axes[1]||0;
+    const now={left:b(14)||x<-.5,right:b(15)||x>.5,up:b(12)||y<-.5,down:b(13)||y>.5,fire:[0,1,2,3,9].some(b)};
+    for(const d of ['left','right','up','down'])if(now[d]&&!prev[d])move(d);
+    if(now.fire&&!prev.fire){if(sel<0)setSel(0,true);else launch(boxes[sel].dataset.href)}
+    prev=now}
+  requestAnimationFrame(poll)})();
+if(matchMedia('(pointer:coarse)').matches)document.getElementById('hint').textContent='TAP A CARTRIDGE TO PLAY';
+</script>
+</body>
+</html>

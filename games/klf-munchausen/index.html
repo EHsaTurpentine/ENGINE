@@ -147,6 +147,7 @@ function newRound(){
 // ------------------------------------------------------------------ gameplay
 function kcDecide(){const k=S.kc,W=wallsNow(),[r,c]=cellOf(k),want=joyDirs();
   const ok=want.filter(d=>open(W,r,c,d,true));
+  if(!ok.length&&tJoyId!==-1&&want.length&&k.moving&&open(W,r,c,k.dir,true))return;   // touch: an early turn is held until a junction allows it
   if(ok.length){const nd=ok.length>1?ok[rnd(ok.length)]:ok[0];k.dir=nd;k.moving=true;k.face=nd;return}
   if(want.length&&!S.bumpHeld){S.bump=T.bumpFlash}            // pushing into a wall: walls flash in the invisible game
   S.bumpHeld=want.length>0;k.moving=false;k.face='face'}
@@ -356,12 +357,23 @@ let tOn=false,tPaused=false,tJoyId=-1,tFireId=-1,playBtn=null;const tuiEl=docume
 function touchEnable(){if(tOn)return;tOn=true;document.body.classList.add('touch')}
 try{if(window.matchMedia&&matchMedia('(pointer: coarse)').matches)touchEnable()}catch(e){}
 addEventListener('pointerdown',e=>{if(e.pointerType==='touch')touchEnable()},{passive:true});
-function tDirs(dx,dy,Rr){touch.left=touch.right=touch.up=touch.down=0;const d=Math.hypot(dx,dy);if(d>Rr*.35){if(Math.abs(dx)>.38*d){if(dx<0)touch.left=1;else touch.right=1}if(Math.abs(dy)>.38*d){if(dy<0)touch.up=1;else touch.down=1}}}
-function joyMove(e){const r=joyEl.getBoundingClientRect(),Rr=r.width*.34;let dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2);const m=Math.hypot(dx,dy);const kx=m>Rr?dx*Rr/m:dx,ky=m>Rr?dy*Rr/m:dy;joyKnob.style.transform='translate('+kx+'px,'+ky+'px)';tDirs(dx,dy,Rr)}
-function joyReset(){tJoyId=-1;joyKnob.style.transform='';touch.left=touch.right=touch.up=touch.down=0}
-joyEl.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();if(tJoyId!==-1)return;tJoyId=e.pointerId;try{joyEl.setPointerCapture(e.pointerId)}catch(x){}joyMove(e)});
-joyEl.addEventListener('pointermove',e=>{if(e.pointerId===tJoyId){e.preventDefault();joyMove(e)}});
-['pointerup','pointercancel','lostpointercapture'].forEach(n=>joyEl.addEventListener(n,e=>{if(e.pointerId===tJoyId)joyReset()}));
+/* Touch stick for a maze game (homage extra; keys and real joysticks stay as the console had them).
+   One direction at a time, never a diagonal. A touch on the stick starts from its centre; a touch anywhere else on the left side
+   starts where the finger lands. The anchor trails the finger at TH px, so any short flick in a new direction (a turn, or a quick
+   fake back the other way) registers after about TH px of travel, wherever the thumb has drifted to. */
+const TH=9;let tAnc=null,tDir=null;
+function tSet(d){tDir=d;touch.left=touch.right=touch.up=touch.down=0;if(d)touch[d]=1;
+  const v={left:[-1,0],right:[1,0],up:[0,-1],down:[0,1]}[d]||[0,0],Rr=joyEl.getBoundingClientRect().width*.34;joyKnob.style.transform='translate('+v[0]*Rr+'px,'+v[1]*Rr+'px)'}
+function joyMove(e){const x=e.clientX,y=e.clientY;let dx=x-tAnc.x,dy=y-tAnc.y;const m=Math.hypot(dx,dy);
+  if(m>=TH){const d=Math.abs(dx)>=Math.abs(dy)?(dx<0?'left':'right'):(dy<0?'up':'down');if(d!==tDir)tSet(d);
+    tAnc.x=x-dx/m*TH;tAnc.y=y-dy/m*TH}}
+function joyStart(e){const r=joyEl.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+  tAnc=Math.hypot(e.clientX-cx,e.clientY-cy)<=r.width/2?{x:cx,y:cy}:{x:e.clientX,y:e.clientY};tDir=null;joyMove(e)}
+function joyReset(){tJoyId=-1;tAnc=null;tDir=null;joyKnob.style.transform='';touch.left=touch.right=touch.up=touch.down=0}
+function joyZone(e){if(e.pointerType!=='touch'||!tOn||tJoyId!==-1)return false;if(e.target.closest&&e.target.closest('button'))return false;return e.clientX<innerWidth*.55}
+addEventListener('pointerdown',e=>{if(!joyZone(e))return;e.preventDefault();tJoyId=e.pointerId;joyStart(e)},{passive:false});
+addEventListener('pointermove',e=>{if(e.pointerId===tJoyId){e.preventDefault();joyMove(e)}},{passive:false});
+['pointerup','pointercancel'].forEach(n=>addEventListener(n,e=>{if(e.pointerId===tJoyId)joyReset()}));
 function setPause(on){tPaused=on;if(tPauseBtn)tPauseBtn.textContent=on?'RESUME':'PAUSE';if(on){joyReset();touch.fire=touch.start=0;stopVoice()}}
 (function(){tPauseBtn=document.createElement('button');tPauseBtn.className='tb small';tPauseBtn.textContent='PAUSE';tPauseBtn.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();setPause(!tPaused)});
   const fb=document.createElement('button');fb.className='tb fire';fb.textContent='FIRE';

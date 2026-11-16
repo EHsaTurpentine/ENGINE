@@ -662,14 +662,24 @@ let tPauseBtn=null;
 function touchEnable(){if(tOn)return;tOn=true;document.body.classList.add('touch')}
 try{if(window.matchMedia&&matchMedia('(pointer: coarse)').matches)touchEnable()}catch(e){}
 addEventListener('pointerdown',e=>{if(e.pointerType==='touch')touchEnable()},{passive:true});
-function joyDirs(dx,dy,R){touch.left=touch.right=touch.up=touch.down=0;const d=Math.hypot(dx,dy);
-  if(d>R*.35){if(Math.abs(dx)>.38*d){if(dx<0)touch.left=1;else touch.right=1}if(Math.abs(dy)>.38*d){if(dy<0)touch.up=1;else touch.down=1}}}
-function joyMove(e){const r=joyEl.getBoundingClientRect(),R=r.width*.34;let dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2);
-  const m=Math.hypot(dx,dy);const kx=m>R?dx*R/m:dx,ky=m>R?dy*R/m:dy;joyKnob.style.transform='translate('+kx+'px,'+ky+'px)';joyDirs(dx,dy,R)}
-function joyReset(){tJoyId=-1;joyKnob.style.transform='';touch.left=touch.right=touch.up=touch.down=0}
-joyEl.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();if(tJoyId!==-1)return;tJoyId=e.pointerId;try{joyEl.setPointerCapture(e.pointerId)}catch(x){}joyMove(e)});
-joyEl.addEventListener('pointermove',e=>{if(e.pointerId===tJoyId){e.preventDefault();joyMove(e)}});
-['pointerup','pointercancel','lostpointercapture'].forEach(n=>joyEl.addEventListener(n,e=>{if(e.pointerId===tJoyId)joyReset()}));
+/* ENGINE² homage touch stick (shared by K.L.F. MUNCHAUSEN, ALTURAS PETE TWO and SHOWDOWN IN 2026 A.D.; keys and real joysticks stay as the console had them).
+   Digital like the console's stick. A touch on the stick starts from its centre; a touch anywhere else on the left side starts where the finger lands.
+   The anchor trails the finger at TH px, so a short flick in a new direction (a turn, or a quick fake back) registers after about TH px of travel,
+   wherever the thumb has drifted to. Diagonals only inside the middle 30 degrees between two axes, so straight pushes stay straight. */
+const TH=9,TWAYS=8;let tAnc=null,tDir='';
+function tSet(d){tDir=d;touch.left=touch.right=touch.up=touch.down=0;for(const k of d.split('-'))if(k)touch[k]=1;
+  const R=joyEl.getBoundingClientRect().width*.34,vx=(touch.right?1:0)-(touch.left?1:0),vy=(touch.down?1:0)-(touch.up?1:0),n=Math.hypot(vx,vy)||1;joyKnob.style.transform='translate('+vx/n*R+'px,'+vy/n*R+'px)'}
+function joyMove(e){const x=e.clientX,y=e.clientY,dx=x-tAnc.x,dy=y-tAnc.y,m=Math.hypot(dx,dy);if(m<TH)return;
+  const ax=Math.abs(dx),ay=Math.abs(dy),h=dx<0?'left':'right',v=dy<0?'up':'down';
+  const d=(TWAYS===8&&Math.min(ax,ay)>.577*Math.max(ax,ay))?v+'-'+h:(ax>=ay?h:v);if(d!==tDir)tSet(d);
+  tAnc.x=x-dx/m*TH;tAnc.y=y-dy/m*TH}
+function joyStart(e){const r=joyEl.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+  tAnc=Math.hypot(e.clientX-cx,e.clientY-cy)<=r.width/2?{x:cx,y:cy}:{x:e.clientX,y:e.clientY};tDir='';joyMove(e)}
+function joyReset(){tJoyId=-1;tAnc=null;tDir='';joyKnob.style.transform='';touch.left=touch.right=touch.up=touch.down=0}
+function joyZone(e){if(e.pointerType!=='touch'||!tOn||tJoyId!==-1)return false;if(e.target.closest&&e.target.closest('button'))return false;return e.clientX<innerWidth*.55}
+addEventListener('pointerdown',e=>{if(!joyZone(e))return;e.preventDefault();tJoyId=e.pointerId;joyStart(e)},{passive:false});
+addEventListener('pointermove',e=>{if(e.pointerId===tJoyId){e.preventDefault();joyMove(e)}},{passive:false});
+['pointerup','pointercancel'].forEach(n=>addEventListener(n,e=>{if(e.pointerId===tJoyId)joyReset()}));
 function setPause(on){tPaused=on;if(tPauseBtn)tPauseBtn.textContent=on?'RESUME':'PAUSE';if(on){joyReset();touch.fire=touch.start=0}}
 (function(){
   tPauseBtn=document.createElement('button');tPauseBtn.className='tb small';tPauseBtn.textContent='PAUSE';

@@ -1600,13 +1600,32 @@ function touchButtons() {
 }
 // ---- joystick (fixed, left side) and pause ----
 const joyEl = document.getElementById('joy'), joyKnob = joyEl.querySelector('.jk'), pauseEl = document.getElementById('pausebox');
-function joyReset() { touch.joy.x = 0; touch.joy.y = 0; touch.joy.id = -1; joyKnob.style.transform = ''; }
+function joyReset() { touch.joy.x = 0; touch.joy.y = 0; touch.joy.id = -1; tAnc = null; joyKnob.style.transform = ''; }
+/* ENGINE² homage touch stick (shared by K.L.F. MUNCHAUSEN, ALTURAS PETE TWO and SHOWDOWN IN 2026 A.D.; keys and real joysticks stay as the console had them).
+   Digital 8-way like the console's stick, full speed. A touch on the stick starts from its centre; a touch anywhere else on the left side
+   (off the playfield, which aims) starts where the finger lands. The anchor trails the finger at TH px, so a short flick in a new direction
+   registers after about TH px of travel, wherever the thumb has drifted to. Diagonals only inside the middle 30 degrees between two axes. */
+const TH = 9; let tAnc = null;
 function joyMove(e) {
-  const r = joyEl.getBoundingClientRect(), R = r.width * 0.34;
-  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
-  const m = Math.hypot(dx, dy); if (m > R) { dx *= R / m; dy *= R / m; }
-  touch.joy.x = dx / R; touch.joy.y = dy / R;
-  joyKnob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+  const x = e.clientX, y = e.clientY, dx = x - tAnc.x, dy = y - tAnc.y, m = Math.hypot(dx, dy); if (m < TH) return;
+  const ax = Math.abs(dx), ay = Math.abs(dy), diag = Math.min(ax, ay) > 0.577 * Math.max(ax, ay);
+  const vx = (diag || ax >= ay) ? Math.sign(dx) : 0, vy = (diag || ay > ax) ? Math.sign(dy) : 0;
+  touch.joy.x = vx; touch.joy.y = vy;
+  const R = joyEl.getBoundingClientRect().width * 0.34, n = Math.hypot(vx, vy) || 1;
+  joyKnob.style.transform = 'translate(' + vx / n * R + 'px,' + vy / n * R + 'px)';
+  tAnc.x = x - dx / m * TH; tAnc.y = y - dy / m * TH;
+}
+function joyStart(e) {
+  const r = joyEl.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  tAnc = Math.hypot(e.clientX - cx, e.clientY - cy) <= r.width / 2 ? { x: cx, y: cy } : { x: e.clientX, y: e.clientY };
+  touch.joy.x = touch.joy.y = 0; joyMove(e);
+}
+function joyZone(e) {
+  if (e.pointerType !== 'touch' || !touch.enabled || touch.joy.id !== -1 || !document.body.classList.contains('joyon')) return false;
+  if (e.target && e.target.closest && e.target.closest('button,#tui')) return false;
+  const pr = (activePresentMode === 'gl' ? glCanvas : canvas).getBoundingClientRect();
+  const onField = e.clientX >= pr.left && e.clientX <= pr.right && e.clientY >= pr.top && e.clientY <= pr.bottom;
+  return (!onField && e.clientX < innerWidth * 0.55) || (e.target && e.target.closest && e.target.closest('#joy'));
 }
 function touchPause(on) {
   if (on === touch.paused) return;
@@ -1619,8 +1638,10 @@ function touchAutoPause() { if (touch.enabled && screen === SCREEN_PLAY && !touc
 const joyAcc = { x: 0, y: 0 };
 function touchJoyKeys(c) {                       // the stick is analog: speed follows how far it is pushed; near-straight pushes snap to the axis
   if (!touch.enabled || screen !== SCREEN_PLAY || touch.paused) return;
-  const j = touch.joy, mag = Math.hypot(j.x, j.y);
-  if (mag < 0.1) { joyAcc.x = 0; joyAcc.y = 0; return; }
+  const j = touch.joy;
+  if (!j.x && !j.y) return;
+  c.left = c.right = c.up = c.down = false; c.ax = j.x * MOVE_SPEED; c.ay = j.y * MOVE_SPEED; return;   // digital, like the console's stick
+  const mag = Math.hypot(j.x, j.y);
   const m = Math.min(1, (mag - 0.1) / 0.5);       // full speed by about 60% of the stick's travel
   let ux = j.x / mag, uy = j.y / mag;
   if (Math.abs(uy) < 0.42) uy = 0; else if (Math.abs(ux) < 0.42) ux = 0;   // within ~25 degrees of an axis: go straight, no drift
@@ -1662,15 +1683,14 @@ function initTouch() {
     if (screen === SCREEN_SELECT) keysPressedThisStep.add('Digit1');                       // tap = 1 PLAYER
     else if (screen === SCREEN_CONTROLS && !ctl.editing) { if (ctlHover()) keysPressedThisStep.add('Enter'); }   // tap a row to choose it
   }, { passive: false });
-  joyEl.addEventListener('pointerdown', function (e) {
+  window.addEventListener('pointerdown', function (e) {
+    if (!joyZone(e)) return;
     e.preventDefault(); e.stopPropagation();
-    if (touch.joy.id !== -1) return;
-    touch.joy.id = e.pointerId; try { joyEl.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
-    joyMove(e);
-  });
-  joyEl.addEventListener('pointermove', function (e) { if (e.pointerId === touch.joy.id) joyMove(e); });
+    touch.joy.id = e.pointerId; joyStart(e);
+  }, { capture: true, passive: false });
+  window.addEventListener('pointermove', function (e) { if (e.pointerId === touch.joy.id) { e.preventDefault(); joyMove(e); } }, { capture: true, passive: false });
   const joyEnd = function (e) { if (e.pointerId === touch.joy.id) joyReset(); };
-  joyEl.addEventListener('pointerup', joyEnd); joyEl.addEventListener('pointercancel', joyEnd);
+  window.addEventListener('pointerup', joyEnd, true); window.addEventListener('pointercancel', joyEnd, true);
   document.addEventListener('visibilitychange', function () { if (document.hidden) touchAutoPause(); });
   window.addEventListener('pagehide', touchAutoPause);
   window.addEventListener('blur', touchAutoPause);

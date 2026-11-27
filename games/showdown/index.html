@@ -725,7 +725,14 @@ const displayCtx = canvas.getContext('2d');           // plain 2D present path
 
 let intScale = 4;
 let screen = SCREEN_SELECT;
-let mode = 0;                       // 0 = none yet, 1 = one player, 2 = two players
+let mode = 0;
+// AUTO PLAY (attract mode, homage to the console's demo): after DEMO_IDLE_STEPS of no input on the title / SELECT GAME screens
+// the computer plays BOTH cowboys. Any key, click, tap or controller press hands the machine back. Nothing in a demo is saved.
+const DEMO_IDLE_STEPS = 20 * 60;          // 20 s of nothing before the demo starts
+const DEMO_RETURN_STEPS = 10 * 60;        // after a demo match the machine waits 10 s before starting the next
+const DEMO_CHARGE_ODDS = 0.85;            // chance, each round, that P1 charges P2 for a melee superkill
+const DEMO_MUTUAL_ODDS = 0.4;             // when P1 charges, chance that P2 charges too (they meet in the middle)
+let demo = false, demoT = 0, idleSteps = 0, clickPoke = false, movePoke = false, padAct = false;                       // 0 = none yet, 1 = one player, 2 = two players
 const select = { phase: SELECT_IDLE, choice: 0, countdown: 0, level: 1, padUp: false, padDown: false };
 const players = [ null, null ];
 const bullets = [];                     // Stage 2: the 4 shared projectile slots
@@ -1374,6 +1381,7 @@ function pollGamepads() {
     const act = (cur.fire && !prev.fire) || (cur.a && !prev.a) || (cur.b && !prev.b) || (cur.start && !prev.start) ||
                 (cur.left && !prev.left) || (cur.right && !prev.right) || (cur.up && !prev.up) || (cur.down && !prev.down);
     if (act) {
+      padAct = true;
       padLastAct[i] = padStepN;
       if (padOwner[0] < 0 || !raw[padOwner[0]]) padOwner[0] = i;
       else if (i !== padOwner[0]) {
@@ -1623,7 +1631,7 @@ function touchJoyKeys(c) {                       // the stick is analog: speed f
 }
 function touchUIUpdate() {
   if (!touch.enabled) return;
-  const showJoy = (screen === SCREEN_PLAY && !touch.paused);
+  const showJoy = (screen === SCREEN_PLAY && !touch.paused && !demo);
   if (document.body.classList.contains('joyon') !== showJoy) { document.body.classList.toggle('joyon', showJoy); if (!showJoy) joyReset(); }
   if (touch.sure > 0) touch.sure -= 1;
   if (screen === SCREEN_PLAY && touch.id === -1 && players[0]) {          // no finger down: the pointer target is where the cowboy stands
@@ -1763,7 +1771,35 @@ const ai = { level: 0, rng: Math.random, hist: [], cooldown: 0, errY: 0, errAge:
 
 function aiLevel() { return AI_LEVELS[ai.level]; }
 
+// AUTO PLAY keeps one AI state per cowboy and swaps it into the shared `ai` for the length of one decision.
+let aiSide = 1;                                   // which figure the AI functions are driving (always 1 outside AUTO PLAY)
+const aiBank = [null, null];
+function aiMakeState(side) {
+  return { level: 1, rng: mulberry32((0xA11CE + 4242 + side * 7919 + Math.floor(Math.random() * 100000)) >>> 0), hist: [], cooldown: 20, errY: 0, errAge: 0,
+           seen: [false, false, false, false], dodgeOn: [false, false, false, false], dodgeDir: 0, charge: false, chargeT: 0 };
+}
+function aiResetBankState(st, side) {
+  st.hist.length = 0; st.cooldown = 20; st.errAge = 0; st.dodgeDir = 0; st.chargeT = 0;
+  for (let i = 0; i < 4; i++) { st.seen[i] = false; st.dodgeOn[i] = false; }
+  st.stuck = undefined; st.wiggle = 0;
+  // decided fresh each round: P1 rushes P2 most rounds, and sometimes P2 rushes back so they meet in the middle
+  st.charge = (side === 0) ? (Math.random() < DEMO_CHARGE_ODDS) : (!!(aiBank[0] && aiBank[0].charge) && Math.random() < DEMO_MUTUAL_ODDS);
+}
+function aiControllerFor(side) {
+  if (!aiBank[side]) { aiBank[side] = aiMakeState(side); aiResetBankState(aiBank[side], side); }
+  const keep = Object.assign({}, ai), keepKeys = Object.keys(ai);
+  Object.assign(ai, aiBank[side]); aiSide = side;
+  const out = aiController();
+  if (side === 1 && aiBank[0] && aiBank[0].charge && !ai.charge && playTicks < 190) out.fire = false;   // caught flat-footed: P2 can't shoot yet while P1 charges
+  aiBank[side] = Object.assign({}, ai);
+  Object.keys(ai).forEach(function (k) { if (keepKeys.indexOf(k) < 0) delete ai[k]; });
+  Object.assign(ai, keep); aiSide = 1;
+  return out;
+}
+
 function aiReset() {
+  if (aiBank[0]) aiResetBankState(aiBank[0], 0);
+  if (aiBank[1]) aiResetBankState(aiBank[1], 1);
   ai.hist.length = 0;
   ai.cooldown = 20;
   ai.errAge = 0;
@@ -1772,8 +1808,9 @@ function aiReset() {
 }
 
 function aiSnapshot() {
+  const foe = players[1 - aiSide];
   ai.hist.push({
-    hx: players[0].x, hy: players[0].y,
+    hx: foe.x, hy: foe.y,
     b: bullets.map(function (b) {
       return { live: b.live, x: b.x, y: b.y, dx: b.dx, dy: b.dy, owner: b.owner, lastObs: b.lastObs, obsCd: b.obsCd };
     }),
@@ -1842,9 +1879,9 @@ function aiPlan(view, me) {
         }
         if (!clear) { blocked[signs[si]] = true; continue; }
       }
-      const sx = me.x - BULLET_SIZE;
+      const sx = (aiSide === 1) ? me.x - BULLET_SIZE : me.x + FIG_W;
       const sy = yc + Math.round((FIG_H - BULLET_SIZE) / 2);
-      if (aiShotHits(sx, sy, -BULLET_STRAIGHT.dx, BULLET_STRAIGHT.dy, tx, ty, me.x, yc)) {
+      if (aiShotHits(sx, sy, (aiSide === 1 ? -1 : 1) * BULLET_STRAIGHT.dx, BULLET_STRAIGHT.dy, tx, ty, me.x, yc)) {
         return { k: signs[si] * k, yc: yc, aim: 'n' };
       }
     }
@@ -1896,9 +1933,21 @@ function aiDodge(view, me) {
 }
 
 // Head for my own (blue-marked) tree to refill. Greedy walk with a small unstick wiggle.
+function aiGoTo(me, out, tx0, ty0) {
+  if (ai.stuck === undefined) { ai.stuck = 0; ai.lastX = me.x; ai.lastY = me.y; ai.wiggle = 0; ai.wdir = 1; }
+  if (me.x === ai.lastX && me.y === ai.lastY) ai.stuck += 1; else ai.stuck = 0;
+  ai.lastX = me.x; ai.lastY = me.y;
+  if (ai.stuck > 5) { ai.wiggle = 14 + Math.floor(ai.rng() * 18); ai.wdir = -(ai.wdir || 1); ai.stuck = 0; ai.wx = Math.floor(ai.rng() * 3) - 1; }
+  if (ai.wiggle > 0) { ai.wiggle -= 1; out.up = ai.wdir < 0; out.down = ai.wdir > 0; out.left = ai.wx < 0; out.right = ai.wx > 0; return out; }
+  const dx = tx0 - me.x, dy = ty0 - me.y;
+  if (Math.abs(dy) > 1) { out.up = dy < 0; out.down = dy > 0; }
+  if (Math.abs(dx) > 1) { out.left = dx < 0; out.right = dx > 0; }
+  return out;
+}
+
 function aiReloadMove(me, out) {
   let tree = null;
-  for (let k = 0; k < obstacles.length; k++) if (obstacles[k].owner === 1) tree = obstacles[k];
+  for (let k = 0; k < obstacles.length; k++) if (obstacles[k].owner === aiSide) tree = obstacles[k];
   if (!tree) return out;
   if (ai.stuck === undefined) { ai.stuck = 0; ai.lastX = me.x; ai.lastY = me.y; ai.wiggle = 0; ai.wdir = 1; }
   if (me.x === ai.lastX && me.y === ai.lastY) ai.stuck += 1; else ai.stuck = 0;
@@ -1916,7 +1965,7 @@ function aiReloadMove(me, out) {
 function aiFireScale(dist) { return Math.max(0.18, Math.min(1, (dist - 24) / 96)); }
 function aiTryFire(out, lv, dist) {
   const slotFree = bullets.some(function (b) { return !b.live; });
-  if (roundState === ROUND_PLAY && ai.cooldown <= 0 && slotFree && (variant !== 'classic' || ammo[1] > 0)) {
+  if (roundState === ROUND_PLAY && ai.cooldown <= 0 && slotFree && (variant !== 'classic' || ammo[aiSide] > 0)) {
     out.fire = true;
     ai.cooldown = Math.max(3, Math.round((lv.fireGap + Math.floor(ai.rng() * lv.jitter)) * aiFireScale(dist)));
     return true;
@@ -1925,19 +1974,25 @@ function aiTryFire(out, lv, dist) {
 }
 function aiController() {
   const out = { left: false, right: false, up: false, down: false, fire: false };
-  const me = players[1];
+  const me = players[aiSide];
   const lv = aiLevel();
   aiSnapshot();
   const view = ai.hist[0];
   if (ai.cooldown > 0) ai.cooldown -= 1;
   if (--ai.errAge <= 0) { ai.errAge = AI_ERR_HOLD; ai.errY = (ai.rng() * 2 - 1) * lv.aimErr; }
 
+  // AUTO PLAY: on charge rounds P1 stops shooting and runs the other cowboy down for a melee superkill
+  if (demo && ai.charge && roundState === ROUND_PLAY) {
+    ai.chargeT = (ai.chargeT || 0) + 1;
+    return aiGoTo(me, out, view.hx, view.hy);
+  }
+
   const d = aiDodge(view, me);
   if (d !== 0) { out.up = d < 0; out.down = d > 0; return out; }
 
   const plan = aiPlan(view, me);
   const dist = Math.hypot((me.x - view.hx), (me.y - view.hy));
-  if (variant === 'classic' && roundState === ROUND_PLAY && (ammo[1] === 0 || (ammo[1] <= 2 && !plan))) return aiReloadMove(me, out);
+  if (variant === 'classic' && roundState === ROUND_PLAY && (ammo[aiSide] === 0 || (ammo[aiSide] <= 2 && !plan))) return aiReloadMove(me, out);
   if (plan) {
     if (plan.k === 0) {
       aiTryFire(out, lv, dist);
@@ -2242,7 +2297,7 @@ function beginRound() {
 
 function setupGame() {
   ai.level = 0;
-  reelReset(true);
+  if (!demo) reelReset(true);
   players[0] = makePlayer(0);
   players[1] = makePlayer(1);
   scores[0] = 0;
@@ -2462,7 +2517,7 @@ function afterRoundClassic() {
   const hi = Math.max(scores[0], scores[1]);
   if (hi >= KILLS_TO_WIN && scores[0] !== scores[1]) {
     winningIndex = scores[0] > scores[1] ? 0 : 1;
-    if (mode === 1 && winningIndex === 0 && scores[1] === 0 && !(melee && melee.fin)) {            // 10-0 over player 2 unlocks ARCADE
+    if (!demo && mode === 1 && winningIndex === 0 && scores[1] === 0 && !(melee && melee.fin)) {            // 10-0 over player 2 unlocks ARCADE
       justUnlocked = !arcadeUnlocked;
       arcadeUnlocked = true;
       try { localStorage.setItem(UNLOCK_KEY, '1'); } catch (e) { /* blocked */ }
@@ -2511,7 +2566,7 @@ function updatePlay() {
     }
   } else if (roundState === ROUND_MATCH_OVER) {
     roundStateTimer -= 1;
-    if (roundStateTimer <= 0) { if (variant === 'arcade') startHiscore(); else startReplay(); }   // -> registry / REPLAY GAME?
+    if (roundStateTimer <= 0) { if (demo) demoEnd(true); else if (variant === 'arcade') startHiscore(); else startReplay(); }   // -> registry / REPLAY GAME?
   } else if (roundState === ROUND_STAGE) {
     roundStateTimer -= 1;
     if (roundStateTimer <= 0) beginRound();
@@ -2550,7 +2605,7 @@ function moveFigure(p, vx, vy) {
 function movePlayers(allowFire) {
   for (let i = 0; i < 2; i++) {
     const p = players[i];
-    const ctrl = (mode === 1 && i === 1) ? aiController() : readHumanController(i);   // Stage 8: 1P -> AI drives P2
+    const ctrl = demo ? aiControllerFor(i) : (mode === 1 && i === 1) ? aiController() : readHumanController(i);   // Stage 8: 1P -> AI drives P2
     const v = readController(ctrl);
     const ox = p.x, oy = p.y;
     moveFigure(p, v.x, v.y);          // clamps to the field AND stops at trees
@@ -3252,7 +3307,7 @@ function landPlayerHit(shooter, victim, bullet, isMelee) {
   hitHead = head;
   scores[shooter] += 1;
   kd[shooter] += 1;
-  if (mode === 1) { careerKD[shooter === 0 ? 0 : 1] += 1; saveKD(); }
+  if (mode === 1 && !demo) { careerKD[shooter === 0 ? 0 : 1] += 1; saveKD(); }
   roundHits += 1;
   struck[victim] = true;
   players[victim].anim.hitT = 0;          // start the spin-and-fall animation
@@ -3267,7 +3322,7 @@ function landPlayerHit(shooter, victim, bullet, isMelee) {
     if (variant === 'arcade') { addPoints(shooter, bonus); popups.push({ x: players[victim].x - 14, y: players[victim].y - 10, text: '+' + bonus, age: 0, color: '#ffd23f' }); }
   } else if (head) {
     headshots[shooter] += 1;
-    if (shooter === 0) { careerHeads += 1; try { localStorage.setItem(HEADS_KEY, String(careerHeads)); } catch (e) { /* ignore */ } }
+    if (shooter === 0 && !demo) { careerHeads += 1; try { localStorage.setItem(HEADS_KEY, String(careerHeads)); } catch (e) { /* ignore */ } }
     popups.push({ x: players[victim].x - 14, y: players[victim].y - 2, text: 'HEADSHOT', age: 0, color: '#ffd23f' });
     if (variant === 'classic') {
       const r = (bullet && bullet.ric) || 0;
@@ -3500,6 +3555,12 @@ function drawPlay() {
   drawBanner();
   drawPopups();
   drawTrick();
+  if (demo) {                                                  // AUTO PLAY tag, blinking at the foot of the field
+    const dt = (Math.floor(demoT / 75) % 2 === 0) ? 'AUTO PLAY' : 'PRESS ANY KEY', dw = textWidth(dt);
+    const dx = Math.floor((PLAYFIELD_W - dw) / 2), dy = PLAYFIELD_H - GLYPH_H - 5;
+    ctx.fillStyle = COLOR.black; ctx.fillRect(dx - 3, dy - 3, dw + 6, GLYPH_H + 6);
+    drawText(dt, dx, dy, (Math.floor(demoT / 20) % 2 === 0) ? '#ffd23f' : COLOR.white);
+  }
   if (roundState === ROUND_STAGE) drawStageClear();
   if (roundState === ROUND_MATCH_OVER) drawMatchOver();
   ctx.restore();
@@ -4067,6 +4128,7 @@ function recordStep() {
 
 // A kill just landed (called from landPlayerHit, before this step's snapshot is taken).
 function reelKill(shooter, victim, bullet, head, meleeName) {
+  if (demo) return;                                           // AUTO PLAY never feeds the kill reel
   const death = (mode === 1 && victim === 0);               // one-player: the human's kills go in the kill reel, the human's deaths in the death reel
   const self = !!(bullet && bullet.owner === victim);
   const tree = (!self && bullet && bullet.tree) || (self && bullet && bullet.tree) || 0;
@@ -4542,14 +4604,49 @@ function reelStopRecording(discard) {
   if (!discard) { reel.msg = 'SAVED REEL TO DOWNLOADS'; reel.msgT = 240; reelStartClip(0); reel.pos = reel.order[0].frames.length; }
 }
 
+function demoStart() {
+  demo = true; demoT = 0; idleSteps = 0;
+  variant = 'classic'; mode = 1;
+  aiBank[0] = aiBank[1] = null;
+  musicStop();
+  setupGame();
+  setScreen(SCREEN_PLAY);
+  updateMouseCursor();
+}
+function demoEnd(wait) {                          // wait = true: a demo match ran its course; false: somebody grabbed the controls
+  demo = false; melee = null; resetBullets();
+  aiBank[0] = aiBank[1] = null;
+  ['stuck', 'lastX', 'lastY', 'wiggle', 'wdir', 'wx', 'charge', 'chargeT'].forEach(function (k) { delete ai[k]; });
+  keysPressedThisStep.clear();
+  mode = 0; variant = 'classic';
+  setScreen(SCREEN_SELECT);
+  idleSteps = wait ? DEMO_IDLE_STEPS - DEMO_RETURN_STEPS : 0;
+  updateMouseCursor();
+}
+function demoWatch() {                            // runs every logic step, before the screen's own update
+  const keyAct = keysDown.size > 0 || keysPressedThisStep.size > 0;
+  const onlyMute = keysPressedThisStep.size === 1 && keysPressedThisStep.has('KeyM') && keysDown.size <= 1;
+  const act = (keyAct && !onlyMute) || clickPoke || padAct;
+  if (demo) {
+    demoT += 1;
+    if (act) { demoEnd(false); }
+  } else {
+    const idleOk = (screen === SCREEN_TITLE && titleT > 15) || (screen === SCREEN_SELECT && select.phase === SELECT_IDLE);
+    if (!idleOk || act || movePoke) idleSteps = 0;
+    else if (++idleSteps >= DEMO_IDLE_STEPS) demoStart();
+  }
+  clickPoke = false; movePoke = false; padAct = false;
+}
+
 function update() {
   pollGamepads();
+  demoWatch();
   if (screen === SCREEN_BOOT) updateBoot();
   else if (screen === SCREEN_TITLE) updateTitle();
   else if (screen === SCREEN_HISCORE) updateHiscore();
   else if (screen === SCREEN_SELECT) updateSelect();
   else if (screen === SCREEN_CONTROLS) updateControls();
-  else if (screen === SCREEN_PLAY) { updatePlay(); recordStep(); }
+  else if (screen === SCREEN_PLAY) { updatePlay(); if (!demo) recordStep(); }
   else if (screen === SCREEN_REEL) updateReel();
   // Reset to the SELECT GAME screen, like the console powering up
   if (screen !== SCREEN_BOOT && screen !== SCREEN_TITLE && screen !== SCREEN_REEL && !(screen === SCREEN_HISCORE && variant === 'arcade' && hs.phase === 'INIT') && ((keysPressedThisStep.has('KeyR') && !(screen === SCREEN_CONTROLS && ctl.editing)) || padEdge.back)) setScreen(SCREEN_SELECT);
@@ -4612,7 +4709,9 @@ function boot() {
     audioUnlock(!isStartKey && e.code !== 'KeyM' ? true : false);
     if (e.code === 'KeyM' && !e.repeat && !(screen === SCREEN_CONTROLS && ctl.editing)) { toggleMute(); if (audioCtx && screen === SCREEN_SELECT) musicStart(); }
   });
-  window.addEventListener('pointerdown', function () { bootPoke = true; audioUnlock(screen !== SCREEN_BOOT); });
+  window.addEventListener('pointerdown', function () { bootPoke = true; clickPoke = true; audioUnlock(screen !== SCREEN_BOOT); });
+  window.addEventListener('pointermove', function () { movePoke = true; });
+  window.addEventListener('touchstart', function () { clickPoke = true; }, { passive: true });
   loadEffects();     // Stage 5: restore saved effect toggles (defaults if none)
   setupCanvas();
   initInput();

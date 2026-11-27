@@ -2258,7 +2258,7 @@ function beginRound() {
   assignOwnTrees();
   ammo[0] = AMMO_MAX; ammo[1] = AMMO_MAX; reloadFlash[0] = 0; reloadFlash[1] = 0;
   aiReset();   // Stage 8
-  roundHits = 0; melee = null; rollColvin();
+  roundHits = 0; melee = null; rollColvin(); rollPainter();
   struck[0] = false; struck[1] = false;
   hitElapsed = 0;
   roundNumber += 1;
@@ -2283,6 +2283,8 @@ function setupGame() {
   headshots[0] = 0; headshots[1] = 0; kd[0] = 0; kd[1] = 0;
   roundNumber = 0;
   colvinRound = (Math.random() < COLVIN_ODDS) ? 1 + Math.floor(Math.random() * 10) : 0;
+  painterRound = (Math.random() < PAINTER_ODDS) ? 1 + Math.floor(Math.random() * 10) : 0;
+  if (painterRound === colvinRound) painterRound = 0;
   popups.length = 0;
   obstacleHitCount = 0;
   winningIndex = -1;
@@ -2653,11 +2655,14 @@ const CUE_CUT = 14;               // step at which P2 comes apart
 function pickMeleeId() {
   let forced = false; try { forced = location.hash === '#cue'; } catch (e) { /* ignore */ }
   if (forced || Math.random() < CUE_ODDS) return CUE_ID;
-  let i; do { i = Math.floor(Math.random() * MELEE_SPRITES.length); } while (i === CUE_ID || i >= MELEE_SPRITES.length - 2);   // the last two sprites are the riot shield
+  let duckHash = false; try { duckHash = location.hash === '#duck'; } catch (e) { /* ignore */ }
+  if (duckHash) return DUCK_FIRST + Math.floor(Math.random() * DUCK_BOX.length);
+  if (forced === false && typeof DUCK_FIRST !== 'undefined' && Math.random() < DUCK_ODDS) return DUCK_FIRST + Math.floor(Math.random() * DUCK_BOX.length);
+  let i; do { i = Math.floor(Math.random() * MELEE_SPRITES.length); } while (i === CUE_ID || i >= SHIELD_ID);   // shield sprites and the duck box are handled separately
   return i;
 }
 function triggerMelee() {
-  const id = (colvin && typeof SHIELD_ID !== 'undefined') ? SHIELD_ID : pickMeleeId();
+  const id = (colvin && typeof SHIELD_ID !== 'undefined') ? SHIELD_ID : (painterMode ? PALETTE_ID : pickMeleeId());
   melee = { id: id, t: 0, seed: (Math.random() * 1e9) | 0, fin: id === CUE_ID || id === SHIELD_ID };
   landPlayerHit(0, 1, null, true);             // red scores the kill; blue spins and falls
 }
@@ -2667,10 +2672,74 @@ function triggerMelee() {
 // auto-aimed), and a shield bash on P2 is the SHIELD SLAM, a game-ending finale. Art generated with Flux in WanGP.
 // ------------------------------------------------------------------
 MELEE_SPRITES.push(
+  {"n":"FLAMING OIL PALETTE","w":33,"h":30,"p":["582247","fccf04","f43205","934c19","ba300b","a55f1e","459191","2d0f0a","af6620","f87d03","512711","322087","754216","0f0404"],"d":"0g310w310w310v31a1310u3121310t31a1213203310o51a12132d1b1310lb151416131a122316151320id141513161513123315133b10fd16192513152a12332a13241d10cb1619351312132a122a131a121a15261d10ad1944151a121a132223222a13151914109419261926151a122a131a12131a122a251618108d19161916391413122a622a13141d1088164d113416193a592514161d108b19162b1c481d19d61b107b1934181c271c181669461916192d54101b194b1c5d164944121726111c2419241826194d111c21163964173c111c21192b1e1814193619241d16398d31152416191418101e1d19211c192659a4111524192b1e10281619161d19342d181419861926292d1e103e1b19462a121a15141916113d1946193d181e103e2d1934131a121a1d19211c411619461d181e105e18141924152a15141916111c4729361b1e207e181d16191614261931341739161d181e209e281d1619b6141d181e20ce381b1d14167d1b181e30fe488e30le90e"});
+MELEE_SPRITES.push(
   {"n":"RIOT SHIELD","w":24,"h":36,"p":["455a64","a6b8cb","193343","64d1dc","aeb6c9","a6a7ba","c6e5e8","4797a3","83828b","954d4c","ea4046","f90303"],"d":"02119i1103115j719101115m11915m9253911e9153925261311e316152925261318141734881316152925261318174488131615292526131814b718131615292526131814972418131615292526131118c11316152925261113e115392536g53925m925m925m925m925m925m925m925m925m925m925m92516k5191a1cma2cma2cma2cma2cma2cma2cma2b1cla10191ck9111011191bi91110172611i6172"},
   {"n":"RIOT SHIELD S","w":12,"h":18,"p":["ca5c66","34606f","64d2dd","ade6ec","abb4c6","999eab","fa0001","b53a3d"],"d":"016a01615a62512851625121423421516251213541215162512851625a625a625a625a625a625a611c817a827a827a827a816111881151"});
 const SHIELD_ID = MELEE_SPRITES.findIndex(function (q) { return q.n === 'RIOT SHIELD'; });
 const SHIELD_S_ID = SHIELD_ID + 1;
+
+// ------------------------------------------------------------------
+// RUBBER DUCK BOX: 64 crayon-named ducks, palette-swapped from the base RUBBER DUCK sprite. They're one shared
+// slot in the normal item pool (DUCK_ODDS), then a random colour is chosen. Each colour is its own sprite id so
+// replays reproduce the exact duck.
+// ------------------------------------------------------------------
+const DUCK_BOX = [["TOMATO SCREAM",["ff594e","ff3a2e","ff392d","ff392d","ff382c","ff3a2e","ff382c","f59009","d9170b","9e1108","730c06","342f25","241b14"]],["SUNBURNT FLAMINGO",["ff968a","ff796a","ff7869","ff7869","ff7768","ff796a","ff7768","ff3b2f","f3341e","bd1c0a","8a1407","342f25","241b14"]],["PUMPKIN SPICE RIOT",["ff8837","ff7417","ff7416","ff7416","ff7315","ff7417","ff7315","ff3b2f","c8570b","923f08","6a2e06","342f25","241b14"]],["TRAFFIC CONE CHAOS",["ff651f","fe4f00","fd4e00","fd4e00","fc4e00","fe4f00","fc4e00","ff3b2f","b73f0a","852e07","612205","342f25","241b14"]],["TANGERINE DREAM TEAM",["ffac3b","ff9f1b","ff9e1a","ff9e1a","ff9e19","ff9f1b","ff9e19","ff3b2f","cb7a0b","945908","6c4006","342f25","241b14"]],["MUSTARD MISCHIEF",["f8bb05","d8a304","d7a304","d7a304","d6a204","d8a304","d6a204","ffd404","9c780b","715708","533f06","342f25","241b14"]],["BANANA BOAT",["ffe654","ffe134","ffe133","ffe133","ffe132","ffe134","ffe132","ff3b2f","ddbe0c","a18a08","756506","342f25","241b14"]],["LEMON ZEST FEST",["ecf778","e8f559","e8f558","e8f558","e8f557","e8f559","e8f557","f59009","d3e41a","99a613","6f780e","342f25","241b14"]],["CHARTREUSE CAPER",["c1e733","b6e01a","b6df1a","b6df1a","b5de1a","b6e01a","b5de1a","f59009","86a31b","617614","47560e","342f25","241b14"]],["LIME IN THE COCONUT",["83ff59","6aff39","6aff38","6aff38","69ff37","6aff39","69ff37","f59009","41e10c","2fa409","227706","342f25","241b14"]],["PICKLE JUICE JIG",["93b901","799901","799801","799801","789701","799901","789701","f59009","596f07","415005","2f3b03","342f25","241b14"]],["AVOCADO REGRET",["62970c","4e790a","4e780a","4e780a","4d770a","4e790a","4d770a","f59009","3b580c","2b4009","1f2f06","342f25","241b14"]],["BROCCOLI TANTRUM",["398233","2f6a2a","2e6a29","2e6a29","2e6929","2f6a2a","2e6929","f59009","264e22","1b3919","142a12","342f25","241b14"]],["SWAMP THING SPRING",["25a964","1f8e55","1f8d54","1f8d54","1f8d54","1f8e55","1f8d54","f59009","1c6840","144c2f","0f3722","342f25","241b14"]],["EMERALD ENVY",["00d27e","00b26a","00b16a","00b16a","00b069","00b26a","00b069","f59009","078150","055e3a","04442a","342f25","241b14"]],["MINT CONDITION",["bbf8dd","9ef5cf","9df5ce","9df5ce","9cf5ce","9ef5cf","9cf5ce","f59009","4ee3a1","1ec079","168c58","342f25","241b14"]],["SEAFOAM SHENANIGANS",["78e5bd","5de0b0","5ce0af","5ce0af","5ce0af","5de0b0","5ce0af","f59009","2fc18b","228d65","19664a","342f25","241b14"]],["TEAL DEAL",["009e9f","007e7f","007d7e","007d7e","007c7d","007e7f","007c7d","f59009","055b5c","044243","033031","342f25","241b14"]],["TURQUOISE TORNADO",["26e5d7","19d2c4","19d1c3","19d1c3","19d1c3","19d2c4","19d1c3","f59009","1a988f","136f68","0e514c","342f25","241b14"]],["ELECTRIC EEL ZAP",["1fe0ff","00dbfe","00dafd","00dafd","00dafc","00dbfe","00dafc","f59009","0a9fb7","077485","055461","342f25","241b14"]],["CERULEAN SERENADE",["48abf6","299df4","289cf4","289cf4","279cf4","299df4","279cf4","f59009","1478c4","0f578e","0b4068","342f25","241b14"]],["BLUE RASPBERRY BANDIT",["2a74ff","0a5eff","095eff","095eff","085dff","0a5eff","085dff","f59009","0a48bf","07358b","052665","342f25","241b14"]],["DENIM DISASTER",["306ac9","2a5daf","2a5cae","2a5cae","295cae","2a5daf","295cae","f59009","254880","1b345d","132644","342f25","241b14"]],["MIDNIGHT SNACK",["212187","1b1b6d","1b1b6c","1b1b6c","1a1a6c","1b1b6d","1a1a6c","f59009","181850","11113a","0c0c2a","342f25","241b14"]],["NAVY SEAL OF APPROVAL",["092562","061a44","061943","061943","061942","061a44","061942","f59009","071532","050f24","040b1a","342f25","241b14"]],["PERIWINKLE PANIC",["aeb7ff","8e9aff","8d99ff","8d99ff","8c99ff","8e9aff","8c99ff","f59009","384df5","0b20d0","081797","342f25","241b14"]],["LAVENDER LARCENY",["c8a4e7","b98ae0","b88ae0","b88ae0","b889df","b98ae0","b889df","f59009","8e4cc7","683098","4c236e","342f25","241b14"]],["GRAPE EXPECTATIONS",["7a35bf","6a2ea5","692ea5","692ea5","692da4","6a2ea5","692da4","f59009","502779","3a1d58","2a1540","342f25","241b14"]],["EGGPLANT ENERGY",["6e3476","592a5f","59295f","59295f","58295e","592a5f","58295e","f59009","422247","301933","231225","342f25","241b14"]],["ULTRAVIOLET SPAGHETTI",["9947e6","8a2ae2","8929e2","8929e2","8929e2","8a2ae2","8929e2","f59009","6820ab","4c177d","37115b","342f25","241b14"]],["ORCHID OVERLOAD",["e089dd","da6fd6","da6ed6","da6ed6","d96ed5","da6fd6","d96ed5","f59009","bf3bba","8b2b87","651f62","342f25","241b14"]],["BUBBLEGUM BANDIT",["ffabdb","ff8bcd","ff8acc","ff8acc","ff89cc","ff8bcd","ff89cc","f59009","f436a2","ce0b79","960858","342f25","241b14"]],["HOT PINK HOLLER",["ff33a1","ff1393","ff1292","ff1292","ff1192","ff1393","ff1192","f59009","c60a70","900851","68063b","342f25","241b14"]],["MAGENTA MAYHEM",["de3b8f","d5247e","d4247e","d4247e","d4247e","d5247e","d4247e","f59009","9b2260","711946","521233","342f25","241b14"]],["CHERRY BOMB",["f10534","d1042d","d0042d","d0042d","cf042c","d1042d","cf042c","f59009","970b27","6e081c","500614","342f25","241b14"]],["RASPBERRY BERET",["c41b5c","a7174f","a6174e","a6174e","a6174e","a7174f","a6174e","f59009","7a173d","58112c","400c20","342f25","241b14"]],["BEET JUICE BUZZ",["981c4e","7c1740","7b173f","7b173f","7b173f","7c1740","7b173f","f59009","5b1531","420f24","300b1a","342f25","241b14"]],["MAROON BALLOON",["a51f1f","8a1a1a","891a1a","891a1a","891a1a","8a1a1a","891a1a","f59009","651818","491111","350d0d","342f25","241b14"]],["BRICK HOUSE PARTY",["cc4136","b4382e","b3382e","b3382e","b3372d","b4382e","b3372d","ffd404","842f28","60221d","461915","342f25","241b14"]],["TERRACOTTA TERROR",["df8d74","d97759","d97758","d97758","d87658","d97759","d87658","ff3b2f","b55233","843b25","602b1b","342f25","241b14"]],["COPPER KETTLE",["d08254","c96f3a","c96f3a","c96f3a","c86e39","c96f3a","c86e39","ff3b2f","955630","6c3e23","4f2d19","342f25","241b14"]],["CINNAMON TOAST WOES",["a45d32","8b4f2b","8b4e2b","8b4e2b","8a4e2a","8b4f2b","8a4e2a","ffd404","663d24","4a2c1a","362013","342f25","241b14"]],["CHOCOLATE THUNDER",["75411d","5b3317","5a3217","5a3217","5a3216","5b3317","5a3216","f59009","432714","311c0f","23150b","342f25","241b14"]],["ESPRESSO EXPRESS",["523119","392312","392212","392212","382211","392312","382211","f59009","2a1b0f","1f130b","160e08","342f25","241b14"]],["MUDPIE MONDAY",["8e6a50","795b45","795a44","795a44","785a44","795b45","785a44","f59009","5a4536","423227","30251d","342f25","241b14"]],["CARAMEL CHAOS",["e49839","df891e","de891e","de891e","de881e","df891e","de881e","ffd404","a2671e","764b16","563710","342f25","241b14"]],["BUTTERSCOTCH BANDIT",["eabf77","e6b25b","e6b15a","e6b15a","e6b15a","e6b25b","e6b15a","ff3b2f","ca8e29","93671e","6b4b16","342f25","241b14"]],["PEACHY KEEN MACHINE",["ffd5be","ffbf9e","ffbf9d","ffbf9d","ffbe9c","ffbf9e","ffbe9c","f59009","f58144","d8520b","9d3c08","342f25","241b14"]],["APRICOT ALARM",["ffdd9e","ffd27e","ffd17d","ffd17d","ffd17c","ffd27e","ffd17c","ff3b2f","f4ae2d","c8850b","916108","342f25","241b14"]],["SALMON ON TUESDAY",["edab95","e99579","e99578","e99578","e99478","e99579","e99478","ff3b2f","d46038","a14223","753019","342f25","241b14"]],["SNOWMAN SNEEZE",["ffffff","f5f8ff","f5f7ff","f5f7ff","f4f7ff","f5f8ff","f4f7ff","f59009","829df8","204ff3","0a32be","342f25","241b14"]],["PEARL ON A BIKE",["f4ecd6","f0e6c8","f0e6c7","f0e6c7","f0e5c7","f0e6c8","f0e5c7","f59009","d4bd79","b7983b","856f2b","342f25","241b14"]],["FOG MACHINE",["bcc5d4","a8b3c8","a8b3c7","a8b3c7","a7b3c7","a8b3c8","a7b3c7","f59009","7585a2","51607a","3b4658","342f25","241b14"]],["PIGEON PLUMAGE",["9da4b1","8a93a3","8a93a2","8a93a2","8993a2","8a93a3","8993a2","f59009","666f7e","4a515c","363b43","342f25","241b14"]],["STORM CLOUD GRUMBLE",["5a687c","4d5969","4c5869","4c5869","4c5868","4d5969","4c5868","f59009","3b434f","2b313a","1f242a","342f25","241b14"]],["CHARCOAL BBQ",["3c3c41","2d2d30","2c2c30","2c2c30","2c2c30","2d2d30","2c2c30","f59009","222225","19191b","121214","342f25","241b14"]],["BLACK LICORICE BLUES",["23232a","151518","141418","141418","141417","151518","141417","ffd404","101013","3d3d5c","2d2d43","342f25","241b14"]],["GOLD DIGGER",["d5bf54","cfb53a","cfb439","cfb439","ceb439","cfb53a","ceb439","ff3b2f","9b882e","716321","524818","342f25","241b14"]],["SILVER SPOON",["e8e8e8","d8d8d8","d7d7d7","d7d7d7","d7d7d7","d8d8d8","d7d7d7","f59009","a3a3a3","777777","565656","342f25","241b14"]],["BRONZE MEDAL MOOD",["b28e36","997a2f","997a2f","997a2f","98792e","997a2f","98792e","ffd404","705b28","52421d","3b3015","342f25","241b14"]],["SPACE GRAPE JELLY",["4531a7","3b2a8e","3a2a8e","3a2a8e","3a298d","3b2a8e","3a298d","f59009","2f2468","221a4c","191337","342f25","241b14"]],["RADIOACTIVE LIME",["cdff1f","c5fe00","c5fd00","c5fd00","c4fc00","c5fe00","c4fc00","f59009","90b70a","698507","4c6105","342f25","241b14"]],["BUBBLE BATH BLUE",["c7e9ff","a7dcff","a6dbff","a6dbff","a5dbff","a7dcff","a5dbff","f59009","4ab1f5","0c89dd","0863a1","342f25","241b14"]],["CLASSIC TUB YELLOW",["ffd923","ffd403","ffd402","ffd402","ffd401","ffd403","ffd401","ff3b2f","ba9c0a","877107","625205","342f25","241b14"]]];
+const DUCK_BASE = MELEE_SPRITES.find(function (q) { return q.n === 'RUBBER DUCK'; });
+const DUCK_FIRST = MELEE_SPRITES.length;
+DUCK_BOX.forEach(function (b) { MELEE_SPRITES.push({ n: b[0] + ' DUCK', w: DUCK_BASE.w, h: DUCK_BASE.h, p: b[1], d: DUCK_BASE.d }); });
+const DUCK_ODDS = 0.15;           // chance a normal (non-cue) drop is a box duck; the plain classic duck stays in the regular pool
+
+MELEE_SPRITES.push(
+  {"n":"PAINTER","w":37,"h":52,"p":["6c06a2","2f0849","7f5138","b37652","9b1b0b","552819","e29b6b","209218","fcb97d","b3c90e","3fc94a","3bba26","146115","df2913","191611"],"d":"0lf124f10sf1211721f10p211b210n211d210lf11ff106610d21152417f105320c21122132744131211421053191510bf1224172957221132105619171610bf13171629431614171211121f105617191310c41719171967191412207330bf1419231719371319241f2083171610931429171f142719131f192314131086141f10941614192714171427292413171f108f161f108315142315131726151317191416171f108f151f108f1e152e25132e3513151320a620951e4613251e5f10bf161f10861536141336151e2610cf161f10af13171916291413161f10ef151f10a61419541f10ff161f109f1d1f131733161d1f10f62f106f131d23141334131d2f10ef161f13104617141d2417561d18131410c61437131026171913181d14195f1c1813191310b617232410161719261c181d7c1813192610b719141f17141319271d1ca81319271610a31719161719172913181cb6193410b3161f131937161c8b1c3617193310bf1629331d1c2b2c4b3c1d1617193610b62417131f1d1c2b2c5b1c281f14193310bf161f201f181cc81d13193310bf161f102f1cd81d13193410cf202d1cd81d1617192410gd1c4a1c6a282614192410ff181c931c382d13192410ff181cd82f14192410ff1c2a1c9b1c2816194610ed1c2a2c7b2c18231417192610ed1c2a2c8b1c181d1f13172310fd1ce81d2f131610gd1ced3f10if1d282c981d3f10kf161f2d6f361f10m6151e153f1016154e1510m61e451f101f151e4510m61e451f10251e4510m61e451f10261e4510m61e451f10261e4510mf16152e151f102f15262f10kf803f80hf904f80gf904f80gf609f603"});
+const PAINTER_ID = MELEE_SPRITES.length - 1;
+const PALETTE_ID = MELEE_SPRITES.findIndex(function (q) { return q.n === 'FLAMING OIL PALETTE'; });
+
+// ------------------------------------------------------------------
+// HAPPY ACCIDENTS MODE: a rare round modifier (own roll, never the same round as COLVIN MODE). An original painter
+// stands in the backdrop; every shot P1 fires leaves a trail of paint splats and, where it ends, sprouts a brand-new
+// tree (max PAINT_TREES per round), so the forest keeps changing. The superkill in this round is always the flaming palette.
+// ------------------------------------------------------------------
+const PAINTER_ODDS = 0.08, PAINT_TREES = 5;
+let painterRound = 0, painterMode = false, splats = [], paintTrees = 0;
+function rollPainter() {
+  let forced = false; try { forced = location.hash === '#painter'; } catch (e) { /* ignore */ }
+  painterMode = !colvin && (forced || (painterRound > 0 && roundNumber + 1 === painterRound));
+  splats.length = 0; paintTrees = 0;
+  if (painterMode) sfx('superkill');
+}
+function paintTrail(b) {
+  if ((b.paintT = (b.paintT || 0) + 1) % 5 === 0) splats.push({ x: b.x, y: b.y, t: 0, c: (splats.length + roundNumber) % TREE_COLORS.length });
+}
+function sproutTree(bx, by) {
+  if (paintTrees >= PAINT_TREES) return;
+  const minX = 34, maxX = PLAYFIELD_W - 34 - OBSTACLE_W, maxY = PLAYFIELD_H - OBSTACLE_EDGE_PAD - OBSTACLE_H;
+  const x = Math.max(minX, Math.min(maxX, Math.round(bx - OBSTACLE_W / 2)));
+  const y = Math.max(OBSTACLE_EDGE_PAD, Math.min(maxY, Math.round(by - OBSTACLE_H / 2)));
+  for (let i = 0; i < 2; i++) { const p = players[i]; if (rectsOverlap(x - 8, y - 8, OBSTACLE_W + 16, OBSTACLE_H + 16, p.x, p.y, FIG_W, FIG_H)) return; }
+  for (let j = 0; j < bullets.length; j++) { const q = bullets[j]; if (q.live && rectsOverlap(x, y, OBSTACLE_W, OBSTACLE_H, q.x, q.y, BULLET_SIZE, BULLET_SIZE)) return; }
+  for (let j = 0; j < obstacles.length; j++) { const o = obstacles[j]; if (rectsOverlap(x - OBSTACLE_GAP, y - OBSTACLE_GAP, OBSTACLE_W + 2 * OBSTACLE_GAP, OBSTACLE_H + 2 * OBSTACLE_GAP, o.x, o.y, OBSTACLE_W, OBSTACLE_H)) return; }
+  obstacles.push({ x: x, y: y, hp: OBSTACLE_HP, color: (paintTrees * 3 + roundNumber + 1) % TREE_COLORS.length });
+  if (!layoutWalkable()) { obstacles.pop(); return; }
+  paintTrees += 1; sfx('bounce');
+  for (let k = 0; k < 6; k++) splats.push({ x: x + 2 + ((k * 7) % OBSTACLE_W), y: y + 2 + ((k * 5) % OBSTACLE_H), t: 0, c: (k + paintTrees) % TREE_COLORS.length });
+}
+function stepSplats() { for (let i = splats.length - 1; i >= 0; i--) { if (++splats[i].t > 50) splats.splice(i, 1); } }
+function drawPainterBackdrop() {
+  if (!painterMode) return;
+  const sp = MELEE_SPRITES[PAINTER_ID];
+  ctx.save(); ctx.imageSmoothingEnabled = false; ctx.globalAlpha = 0.5;
+  ctx.drawImage(meleeCanvas(PAINTER_ID), Math.floor((PLAYFIELD_W - sp.w) / 2), PLAYFIELD_H - sp.h - 3);
+  ctx.restore();
+}
+function drawSplats() {
+  for (let i = 0; i < splats.length; i++) {
+    const s = splats[i], a = 1 - s.t / 50, r = s.t < 6 ? 3 : 2;
+    ctx.save(); ctx.globalAlpha = Math.max(0.15, a); ctx.fillStyle = TREE_COLORS[s.c];
+    ctx.fillRect(Math.round(s.x) - 1, Math.round(s.y) - 1, r, r); ctx.fillRect(Math.round(s.x) + 2, Math.round(s.y), 1, 1); ctx.fillRect(Math.round(s.x), Math.round(s.y) + 3, 1, 1);
+    ctx.restore();
+  }
+}
 const COLVIN_ODDS = 0.08;         // chance PER GAME (about 1 game in 12) that COLVIN MODE shows up at all; it then appears in exactly one round
 let colvinRound = 0;              // the one round (1-10) of this game that gets the shield; 0 = none this game
 const SH_HIT = 12, SH_T0 = 20;   // finale beats: bash lands (12), P2 launched (20); the big shield stamps the screen 16 steps after P2 detonates
@@ -3160,6 +3229,7 @@ function tryFire(index, ctrl) {
 }
 
 function updateBullets() {
+  if (painterMode) stepSplats();
   for (let i = 0; i < bullets.length; i++) {
     const b = bullets[i];
     if (!b.live) continue;
@@ -3178,17 +3248,18 @@ function updateBullets() {
       b.ric = (b.ric || 0) + 1;
       sfx('bounce');
     }
+    if (painterMode && b.owner === 0) paintTrail(b);
     if (colvin) shieldDeflect(b);                      // COLVIN MODE: riot shield bounces P2's bullets back, faster
     // Stage 3: deflect off scenery first; otherwise check the opposing figure
     if (!deflectOffObstacles(b)) {
       const victim = bulletHitPlayer(b);
       if (victim !== -1) {
-        b.live = false;
+        b.live = false; if (painterMode && b.owner === 0) sproutTree(b.x, b.y);
         landPlayerHit(victim === b.owner ? 1 - b.owner : b.owner, victim, b);   // a self-hit scores for the opponent
       }
     }
     // Die when it leaves the playfield horizontally
-    if (b.x < 0 || b.x > PLAYFIELD_W) b.live = false;
+    if (b.x < 0 || b.x > PLAYFIELD_W) { if (b.live && painterMode && b.owner === 0) sproutTree(Math.max(0, Math.min(PLAYFIELD_W, b.x)), b.y); b.live = false; }
   }
 }
 
@@ -3295,7 +3366,9 @@ function drawPlay() {
   ctx.fillRect(0, 0, 1, PLAYFIELD_H);
   ctx.fillRect(PLAYFIELD_W - 1, 0, 1, PLAYFIELD_H);
 
+  drawPainterBackdrop();
   drawObstacles();
+  drawSplats();
 
   // Stage 3: struck figures play the spin-and-fall animation (replaces the old blink)
   for (let i = 0; i < 2; i++) {
@@ -3435,6 +3508,7 @@ function drawBanner() {
   ctx.fillStyle = COLOR.black;
   ctx.fillRect(x - 3, y - 3, w + 6, GLYPH_H + 6);
   drawText(text, x, y, COLOR.white);
+  if (painterMode) { const cm = 'HAPPY ACCIDENTS', cw = textWidth(cm); ctx.fillStyle = COLOR.black; ctx.fillRect(Math.floor((PLAYFIELD_W - cw) / 2) - 3, y - 17, cw + 6, GLYPH_H + 6); drawText(cm, Math.floor((PLAYFIELD_W - cw) / 2), y - 14, TREE_COLORS[(roundStateTimer >> 3) % TREE_COLORS.length]); }
   if (colvin) { const cm = 'COLVIN MODE', cw = textWidth(cm); ctx.fillStyle = COLOR.black; ctx.fillRect(Math.floor((PLAYFIELD_W - cw) / 2) - 3, y - 17, cw + 6, GLYPH_H + 6); drawText(cm, Math.floor((PLAYFIELD_W - cw) / 2), y - 14, (roundStateTimer >> 3) & 1 ? '#ff2a2a' : COLOR.white); }
 }
 
@@ -3844,10 +3918,10 @@ function reelReset(full) {
 }
 
 function takeSnap() {
-  if (!reel.obs || reel.obsRound !== roundNumber) { reel.obs = cl(obstacles); reel.obsRound = roundNumber; }
+  if (!reel.obs || painterMode || reel.obsRound !== roundNumber) { reel.obs = cl(obstacles); reel.obsRound = roundNumber; }
   const sn = { p: cl(players), b: cl(bullets), o: reel.obs, st: struck.slice(), sc: scores.slice(), pt: points.slice(),
                lv: lives.slice(), am: ammo.slice(), sk: streak.slice(), rs: roundState, rt: roundStateTimer, he: hitElapsed,
-               rn: roundNumber, tf: (treeFlashFrames >= TREE_FLASH_FRAMES) ? treeFlashColor : null, ev: stepEvents, ml: melee ? { id: melee.id, t: melee.t, seed: melee.seed, fin: melee.fin } : null, cv: colvin };
+               rn: roundNumber, tf: (treeFlashFrames >= TREE_FLASH_FRAMES) ? treeFlashColor : null, ev: stepEvents, ml: melee ? { id: melee.id, t: melee.t, seed: melee.seed, fin: melee.fin } : null, cv: colvin, pm: painterMode };
   stepEvents = [];
   return sn;
 }
@@ -3858,7 +3932,7 @@ function applySnap(sn) {
   obstacles.length = 0; sn.o.forEach(function (o) { obstacles.push(o); });
   for (let i = 0; i < 2; i++) { struck[i] = sn.st[i]; scores[i] = sn.sc[i]; points[i] = sn.pt[i]; lives[i] = sn.lv[i]; ammo[i] = sn.am[i]; streak[i] = sn.sk[i]; }
   roundState = sn.rs; roundStateTimer = sn.rt; hitElapsed = sn.he; roundNumber = sn.rn;
-  melee = sn.ml ? Object.assign({}, sn.ml) : null; colvin = !!sn.cv;
+  melee = sn.ml ? Object.assign({}, sn.ml) : null; colvin = !!sn.cv; painterMode = !!sn.pm;
 }
 
 function recordStep() {
